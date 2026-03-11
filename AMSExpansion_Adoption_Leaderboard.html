@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AMSExpansion Adoption Leaderboard - Cortex Code & Snowflake Intelligence</title>
+<style>
+  :root {
+    --snow-blue: #0056b3;
+    --snow-light: #29b5e8;
+    --snow-dark: #003d82;
+    --gold: #f5a623;
+    --silver: #b0b0b0;
+    --bronze: #cd7f32;
+    --bg: #f4f7fb;
+    --card-bg: #ffffff;
+    --text: #1e293b;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --success: #10b981;
+    --coco-color: #8b5cf6;
+    --si-color: #0ea5e9;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  .header {
+    background: linear-gradient(135deg, var(--snow-dark), var(--snow-blue), var(--snow-light));
+    color: white;
+    padding: 32px 40px;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::after {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -10%;
+    width: 400px;
+    height: 400px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 50%;
+  }
+  .header h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+  .header .subtitle { font-size: 15px; opacity: 0.85; }
+  .header .meta { font-size: 12px; opacity: 0.65; margin-top: 8px; }
+
+  .container { max-width: 1600px; margin: 0 auto; padding: 24px; }
+
+  .summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .summary-card {
+    background: var(--card-bg);
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    text-align: center;
+  }
+  .summary-card .value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--snow-blue);
+  }
+  .summary-card .value.coco { color: var(--coco-color); }
+  .summary-card .value.si { color: var(--si-color); }
+  .summary-card .label {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+  }
+
+  .data-notes {
+    background: var(--card-bg);
+    border-radius: 10px;
+    padding: 16px 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    margin-bottom: 28px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+  .data-notes strong { color: var(--text); }
+
+  .section {
+    background: var(--card-bg);
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    margin-bottom: 28px;
+    overflow: hidden;
+  }
+  .section-header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-header h2 { font-size: 18px; font-weight: 600; }
+  .section-header .badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+  .badge-si { background: #e0f2fe; color: #0369a1; }
+  .badge-coco { background: #ede9fe; color: #6d28d9; }
+  .section-header .note { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    table-layout: auto;
+  }
+  thead th {
+    background: #f8fafc;
+    padding: 8px 10px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+  }
+  thead th.right { text-align: right; }
+  tbody td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  tbody td.right { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody td.geo { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  tbody tr:hover { background: #f8fafc; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  .rank {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    font-weight: 700;
+    font-size: 12px;
+    color: white;
+  }
+  .rank-1 { background: var(--gold); }
+  .rank-2 { background: var(--silver); }
+  .rank-3 { background: var(--bronze); }
+  .rank-n { background: #cbd5e1; color: #475569; font-weight: 500; }
+
+  .pair-names { line-height: 1.3; }
+  .pair-names .primary { font-weight: 600; color: var(--text); }
+  .pair-names .secondary { font-size: 12px; color: var(--muted); }
+
+  .bar-cell { min-width: 80px; width: 80px; }
+  .bar-wrapper { display: flex; align-items: center; gap: 8px; }
+  .bar {
+    height: 8px;
+    border-radius: 4px;
+    min-width: 2px;
+    transition: width 0.3s;
+  }
+  .bar-si { background: linear-gradient(90deg, #0ea5e9, #38bdf8); }
+  .bar-coco { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+  .bar-total { background: linear-gradient(90deg, var(--snow-blue), var(--snow-light)); }
+  .bar-value { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+  .pct { font-weight: 600; }
+  .pct-high { color: var(--success); }
+  .pct-mid { color: var(--gold); }
+  .pct-low { color: var(--muted); }
+
+  .tab-container { display: flex; gap: 4px; padding: 0 24px; padding-top: 12px; }
+  .tab {
+    padding: 8px 16px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--snow-blue); border-bottom-color: var(--snow-blue); font-weight: 700; }
+
+  .tab-panel { display: none; overflow-x: auto; }
+  .tab-panel.active { display: block; }
+
+  .footer {
+    text-align: center;
+    padding: 20px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  @media print {
+    .header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .tab-panel { display: block !important; }
+    .tab-container { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Cortex Code & Snowflake Intelligence Adoption Leaderboard</h1>
+  <div class="subtitle">AMSExpansion Theater &mdash; Top 5 Groupings</div>
+  <div class="meta">Generated March 9, 2026 &nbsp;|&nbsp; SI Data: Last 90 Days &nbsp;|&nbsp; CoCo Data: Last 90 Days (Dec 2025&ndash;Mar 2026) &nbsp;|&nbsp; Sources: Internal Telemetry, SFDC, SE Attributes</div>
+</div>
+
+<div class="container">
+
+  <!-- Summary Cards -->
+  <div class="summary-cards">
+    <div class="summary-card">
+      <div class="value si">14,111</div>
+      <div class="label">SI Credits (90d)</div>
+    </div>
+    <div class="summary-card">
+      <div class="value si">7,136</div>
+      <div class="label">SI Users (90d)</div>
+    </div>
+    <div class="summary-card">
+      <div class="value coco">107,256</div>
+      <div class="label">CoCo Credits (90d)</div>
+    </div>
+    <div class="summary-card">
+      <div class="value coco">2,782,201</div>
+      <div class="label">CoCo Requests (90d)</div>
+    </div>
+    <div class="summary-card">
+      <div class="value">1,200</div>
+      <div class="label">AE/SE Pairs Active</div>
+    </div>
+  </div>
+
+  <!-- AE / SE PAIR LEADERBOARD -->
+  <div class="section">
+    <div class="section-header">
+      <h2>AE / SE Pair Leaderboard</h2>
+      <span class="badge badge-coco">Top 5</span>
+      <span class="note">Ranked by Credits</span>
+    </div>
+    <div class="tab-container">
+      <button class="tab active" onclick="switchTab(event, 'ae-coco')">CoCo Only</button>
+      <button class="tab" onclick="switchTab(event, 'ae-si')">SI Only</button>
+    </div>
+    <div id="ae-coco" class="tab-panel active">
+      <table>
+        <thead><tr>
+          <th style="width:40px">#</th><th>AE / SE</th><th>Region</th><th>District</th><th>Patch</th>
+          <th class="right">Accts Using</th><th class="right">Total Accts</th><th class="right">% CoCo</th>
+          <th class="right">CoCo Credits</th><th class="right">CoCo Requests</th><th class="bar-cell">Credits</th>
+        </tr></thead>
+        <tbody id="ae-coco-body"></tbody>
+      </table>
+    </div>
+    <div id="ae-si" class="tab-panel">
+      <table>
+        <thead><tr>
+          <th style="width:40px">#</th><th>AE / SE</th><th>Region</th><th>District</th><th>Patch</th>
+          <th class="right">Accts Using</th><th class="right">Total Accts</th><th class="right">% SI</th>
+          <th class="right">SI Credits (90d)</th><th class="right">SI Users (90d)</th>
+          <th class="right">SI WAU</th><th class="right">SI Questions (90d)</th><th class="bar-cell">Credits</th>
+        </tr></thead>
+        <tbody id="ae-si-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- DM / SEM PAIR LEADERBOARD -->
+  <div class="section">
+    <div class="section-header">
+      <h2>DM / SEM Pair Leaderboard</h2>
+      <span class="badge badge-coco">Top 5</span>
+      <span class="note">Ranked by Credits</span>
+    </div>
+    <div class="tab-container">
+      <button class="tab active" onclick="switchTab(event, 'dm-coco')">CoCo Only</button>
+      <button class="tab" onclick="switchTab(event, 'dm-si')">SI Only</button>
+    </div>
+    <div id="dm-coco" class="tab-panel active">
+      <table>
+        <thead><tr>
+          <th style="width:40px">#</th><th>DM / SEM</th><th>Region</th><th>District</th>
+          <th class="right">AE/SE Pairs</th><th class="right">Accts Using</th><th class="right">Total Accts</th>
+          <th class="right">% CoCo</th><th class="right">CoCo Credits</th><th class="right">CoCo Requests</th>
+          <th class="bar-cell">Credits</th>
+        </tr></thead>
+        <tbody id="dm-coco-body"></tbody>
+      </table>
+    </div>
+    <div id="dm-si" class="tab-panel">
+      <table>
+        <thead><tr>
+          <th style="width:40px">#</th><th>DM / SEM</th><th>Region</th><th>District</th>
+          <th class="right">AE/SE Pairs</th><th class="right">Accts Using</th><th class="right">Total Accts</th>
+          <th class="right">% SI</th><th class="right">SI Credits (90d)</th><th class="right">SI Users (90d)</th>
+          <th class="right">SI WAU</th><th class="right">SI Questions (90d)</th><th class="bar-cell">Credits</th>
+        </tr></thead>
+        <tbody id="dm-si-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- RVP / SE DIRECTOR LEADERBOARD -->
+  <div class="section">
+    <div class="section-header">
+      <h2>RVP / SE Director Leaderboard</h2>
+      <span class="badge badge-coco">Region Level</span>
+      <span class="note">Ranked by Credits</span>
+    </div>
+    <div class="tab-container">
+      <button class="tab active" onclick="switchTab(event, 'rvp-coco')">CoCo Only</button>
+      <button class="tab" onclick="switchTab(event, 'rvp-si')">SI Only</button>
+    </div>
+    <div id="rvp-coco" class="tab-panel active">
+      <table>
+        <thead><tr>
+          <th style="width:40px">#</th><th>RVP / SE Director</th><th>Region</th>
+          <th class="right">DM/SEM Pairs</th><th class="right">Accts Using</th><th class="right">Total Accts</th>
+          <th class="right">% CoCo</th><th class="right">CoCo Credits</th><th class="right">CoCo Requests</th>
+          <th class="bar-cell">Credits</th>
+        </tr></thead>
+        <tbody id="rvp-coco-body"></tbody>
+      </table>
+    </div>
+    <div id="rvp-si" class="tab-panel">
+      <table>
+        <thead><tr>
+          <th style="width:40px">#</th><th>RVP / SE Director</th><th>Region</th>
+          <th class="right">DM/SEM Pairs</th><th class="right">Accts Using</th><th class="right">Total Accts</th>
+          <th class="right">% SI</th><th class="right">SI Credits (90d)</th><th class="right">SI Users (90d)</th>
+          <th class="right">SI WAU</th><th class="right">SI Questions (90d)</th><th class="bar-cell">Credits</th>
+        </tr></thead>
+        <tbody id="rvp-si-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Data Definitions -->
+  <div class="data-notes">
+    <strong>Data Definitions:</strong><br>
+    <strong>Accts Using</strong> = Number of accounts with product activity (CoCo or SI) in the pair's portfolio.<br>
+    <strong>Total Accts</strong> = Total accounts assigned to the AE/SE or DM/SEM pair in AMSExpansion.<br>
+    <strong>% CoCo / % SI</strong> = Adoption rate &mdash; Accts Using / Total Accts.<br>
+    <strong>SI Users (90d)</strong> = Distinct users with Snowflake Intelligence activity in the last 90 days.<br>
+    <strong>SI WAU</strong> = Weekly Active Users &mdash; distinct SI users in the last 7 days.<br>
+    <strong>SI Credits</strong> = Token credits consumed by SI queries in the 90-day window.<br>
+    <strong>SI Questions</strong> = Distinct requests (queries) made to Snowflake Intelligence.<br>
+    <strong>CoCo Credits</strong> = Cortex Code credits consumed in the last 90 days. Includes CLI, Desktop, and UI usage.<br>
+    <strong>Region / District / Patch</strong> = From SE Attributes hierarchy.<br>
+    <strong>RVP</strong> = Regional Vice President (sales). <strong>SE Director</strong> = SE leadership counterpart.<br>
+    <strong>Open Position Exclusion</strong> = Only accounts owned by active Account Executives are included.
+  </div>
+
+  <div class="footer">
+    Data Sources: SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_FACT,
+    SALES.DEV.BOB_SNOWFLAKE_INTELLIGENCE_USAGE_STREAMLIT_AGG,
+    SNOWSCIENCE.LLM.SNOWFLAKE_INTELLIGENCE_ACCOUNTS_CREDITS,
+    SALES.RAVEN.ACCOUNT,
+    SALES.SE_REPORTING.DIM_ACCOUNTS_SE_ATTRIBUTES_DAILY
+  </div>
+</div>
+
+<script>
+// ---- DATA ----
+const aeCocoOnly = [{"ae": "Nicholas Messinger", "se": "Brendan Farley", "region": "NortheastExp", "district": "EntNewEngland2", "patch": "EntNewEngland2_P1", "accts": 5, "totAccts": 5, "cr": 4176.75, "reqs": 106058}, {"ae": "Lindsey Zelhart", "se": "Rick Michaud", "region": "USGrowthExp", "district": "USGrowthMidAtlExp", "patch": "USGrowthMidAtlExp_P3", "accts": 13, "totAccts": 15, "cr": 3317.91, "reqs": 61555}, {"ae": "Liz Backe", "se": "Rafael Arranz Perez-del-Molino", "region": "NortheastExp", "district": "EntHCLSEast", "patch": "EntHCLSEast_P3", "accts": 10, "totAccts": 13, "cr": 2987.78, "reqs": 45869}, {"ae": "Jake Neuber", "se": "Pranjal Singh", "region": "NortheastExp", "district": "EntHCLSEast", "patch": "EntHCLSEast_P5", "accts": 10, "totAccts": 12, "cr": 2456.35, "reqs": 43863}, {"ae": "Kristin Myros", "se": "Rich Ecker", "region": "SoutheastExp", "district": "EntSEVirginia", "patch": "EntSEVirginia_P6", "accts": 1, "totAccts": 3, "cr": 2107.41, "reqs": 61671}];
+const aeSiOnly = [{"ae": "Anna Ferro", "se": "Mike Whitaker", "region": "Commercial", "district": "CommRetailEast", "patch": "CommRetailEast_P2", "accts": 2, "totAccts": 11, "cr": 1535.96, "users": 12, "wau": 7, "siQ": 2102}, {"ae": "Emerson Rutkowski", "se": "Jonathan Leati", "region": "SouthwestExp", "district": "EntLosAngeles", "patch": "EntLosAngeles_P3", "accts": 5, "totAccts": 7, "cr": 964.97, "users": 89, "wau": 26, "siQ": 4221}, {"ae": "Thomas Morlock", "se": "Vikrant Gawde", "region": "SouthwestExp", "district": "EntHCLSWest", "patch": "EntHCLSWest_P2", "accts": 2, "totAccts": 9, "cr": 722.65, "users": 17, "wau": 9, "siQ": 887}, {"ae": "Nicholas Messinger", "se": "Brendan Farley", "region": "NortheastExp", "district": "EntNewEngland2", "patch": "EntNewEngland2_P1", "accts": 4, "totAccts": 5, "cr": 538.3, "users": 206, "wau": 88, "siQ": 11079}, {"ae": "Mary Bance", "se": "Michael Costner", "region": "USGrowthExp", "district": "USGrowthSEExp", "patch": "USGrowthSEExp_P1", "accts": 10, "totAccts": 20, "cr": 382.5, "users": 46, "wau": 34, "siQ": 5844}];
+const dmCocoOnly = [{"dm": "Dan Stefanini", "sem": "Trent Fields", "region": "NortheastExp", "districts": "EntHCLSEast", "pairs": 14, "accts": 53, "totAccts": 91, "cr": 7811.17, "reqs": 168072}, {"dm": "Bryan Abou-Rjaily", "sem": "Ashish Patel", "region": "NortheastExp", "districts": "EntNewEngland2", "pairs": 10, "accts": 16, "totAccts": 28, "cr": 5208.42, "reqs": 130773}, {"dm": "Stephen Kalkbrenner", "sem": "Chris Williams", "region": "USGrowthExp", "districts": "USGrowthMidAtlExp", "pairs": 45, "accts": 105, "totAccts": 146, "cr": 4622.44, "reqs": 96728}, {"dm": "Charles France", "sem": "Michal Nochumson", "region": "SoutheastExp", "districts": "EntSEVirginia", "pairs": 20, "accts": 26, "totAccts": 45, "cr": 4581.8, "reqs": 109149}, {"dm": "Jen O'Pry", "sem": "Samuel Ehrlich", "region": "Commercial", "districts": "CommFinServ2, CommRetailEast", "pairs": 269, "accts": 415, "totAccts": 774, "cr": 4229.19, "reqs": 111007}];
+const dmSiOnly = [{"dm": "Jen O'Pry", "sem": "Samuel Ehrlich", "region": "Commercial", "districts": "CommFinServ2, CommRetailEast", "pairs": 269, "accts": 95, "totAccts": 774, "cr": 2113.88, "users": 293, "wau": 197, "siQ": 28649}, {"dm": "Eduardo Payan", "sem": "", "region": "SouthwestExp", "districts": "EntLosAngeles", "pairs": 12, "accts": 17, "totAccts": 42, "cr": 1050.6, "users": 156, "wau": 92, "siQ": 9323}, {"dm": "JD Olsen", "sem": "Mike Malveira", "region": "SouthwestExp", "districts": "EntHCLSWest", "pairs": 13, "accts": 13, "totAccts": 80, "cr": 945.96, "users": 105, "wau": 80, "siQ": 8922}, {"dm": "Bryan Abou-Rjaily", "sem": "Ashish Patel", "region": "NortheastExp", "districts": "EntNewEngland2", "pairs": 10, "accts": 13, "totAccts": 28, "cr": 837.01, "users": 378, "wau": 251, "siQ": 28804}, {"dm": "Joseph Alvarez", "sem": "Chris Williams", "region": "USGrowthExp", "districts": "USGrowthSEExp", "pairs": 56, "accts": 45, "totAccts": 180, "cr": 678.49, "users": 211, "wau": 133, "siQ": 29978}];
+const rvpCocoOnly = [{"rvp": "Brian Daniels", "seDir": "Ben Greene", "region": "USGrowthExp", "dmPairs": 8, "accts": 931, "totAccts": 1249, "cr": 19690.22, "reqs": 550485}, {"rvp": "Matt Moscoffian", "seDir": "Robert Silva", "region": "NortheastExp", "dmPairs": 5, "accts": 174, "totAccts": 349, "cr": 19552.05, "reqs": 497776}, {"rvp": "Lisa Yu", "seDir": "Ben Greene", "region": "Commercial", "dmPairs": 7, "accts": 1721, "totAccts": 3274, "cr": 15082.74, "reqs": 404126}, {"rvp": "Jeff LaCamera", "seDir": "Josh Chacona", "region": "CentralExp", "dmPairs": 4, "accts": 185, "totAccts": 287, "cr": 13638.31, "reqs": 356041}, {"rvp": "Adrian Tarquinio", "seDir": "Robert Silva", "region": "SoutheastExp", "dmPairs": 5, "accts": 149, "totAccts": 258, "cr": 11355.75, "reqs": 297190}];
+const rvpSiOnly = [{"rvp": "Lisa Yu", "seDir": "Ben Greene", "region": "Commercial", "dmPairs": 7, "accts": 373, "totAccts": 3274, "cr": 3350.48, "users": 1488, "wau": 912, "siQ": 125111}, {"rvp": "Adam Sadowski", "seDir": "Daniel Gostrer", "region": "SouthwestExp", "dmPairs": 3, "accts": 59, "totAccts": 225, "cr": 2657.29, "users": 421, "wau": 301, "siQ": 38740}, {"rvp": "Brian Daniels", "seDir": "Ben Greene", "region": "USGrowthExp", "dmPairs": 8, "accts": 286, "totAccts": 1249, "cr": 2266.26, "users": 1442, "wau": 847, "siQ": 146799}, {"rvp": "Matt Moscoffian", "seDir": "Robert Silva", "region": "NortheastExp", "dmPairs": 5, "accts": 88, "totAccts": 349, "cr": 2012.77, "users": 1043, "wau": 682, "siQ": 99304}, {"rvp": "Adrian Tarquinio", "seDir": "Robert Silva", "region": "SoutheastExp", "dmPairs": 5, "accts": 73, "totAccts": 258, "cr": 1335.71, "users": 613, "wau": 485, "siQ": 70150}];
+
+// ---- RENDERING ----
+function rankBadge(i) {
+  const cls = i < 3 ? `rank-${i+1}` : 'rank-n';
+  return `<span class="rank ${cls}">${i+1}</span>`;
+}
+function fmt(n) { return n == null ? '—' : n.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:2}); }
+function pairCell(a, b) {
+  return `<div class="pair-names"><div class="primary">${a || '(Vacant)'}</div><div class="secondary">${b || '(Unmapped)'}</div></div>`;
+}
+function singleBar(val, max, cls) {
+  const pct = max > 0 ? (val/max)*100 : 0;
+  return `<div class="bar-wrapper"><div class="bar ${cls}" style="width:${Math.max(pct,1)}%"></div></div>`;
+}
+function pctCell(accts, total) {
+  if (!total || total === 0) return '<td class="right">&mdash;</td>';
+  const pct = Math.round(accts / total * 100);
+  const cls = pct >= 50 ? 'pct-high' : pct >= 20 ? 'pct-mid' : 'pct-low';
+  return `<td class="right"><span class="pct ${cls}">${pct}%</span></td>`;
+}
+
+function renderAeCocoSingle(tbody, data) {
+  const max = Math.max(...data.map(d => d.cr));
+  tbody.innerHTML = data.map((d, i) => `<tr>
+    <td>${rankBadge(i)}</td>
+    <td>${pairCell(d.ae, d.se)}</td>
+    <td class="geo">${d.region || '—'}</td>
+    <td class="geo">${d.district || '—'}</td>
+    <td class="geo">${d.patch || '—'}</td>
+    <td class="right">${d.accts}</td>
+    <td class="right">${d.totAccts}</td>
+    ${pctCell(d.accts, d.totAccts)}
+    <td class="right"><strong>${fmt(d.cr)}</strong></td>
+    <td class="right">${fmt(d.reqs)}</td>
+    <td class="bar-cell">${singleBar(d.cr, max, 'bar-coco')}</td>
+  </tr>`).join('');
+}
+
+function renderAeSiSingle(tbody, data) {
+  const max = Math.max(...data.map(d => d.cr));
+  tbody.innerHTML = data.map((d, i) => `<tr>
+    <td>${rankBadge(i)}</td>
+    <td>${pairCell(d.ae, d.se)}</td>
+    <td class="geo">${d.region || '—'}</td>
+    <td class="geo">${d.district || '—'}</td>
+    <td class="geo">${d.patch || '—'}</td>
+    <td class="right">${d.accts}</td>
+    <td class="right">${d.totAccts}</td>
+    ${pctCell(d.accts, d.totAccts)}
+    <td class="right"><strong>${fmt(d.cr)}</strong></td>
+    <td class="right">${fmt(d.users)}</td>
+    <td class="right">${fmt(d.wau)}</td>
+    <td class="right">${fmt(d.siQ)}</td>
+    <td class="bar-cell">${singleBar(d.cr, max, 'bar-si')}</td>
+  </tr>`).join('');
+}
+
+function renderDmCocoSingle(tbody, data) {
+  const max = Math.max(...data.map(d => d.cr));
+  tbody.innerHTML = data.map((d, i) => `<tr>
+    <td>${rankBadge(i)}</td>
+    <td>${pairCell(d.dm, d.sem)}</td>
+    <td class="geo">${d.region || '—'}</td>
+    <td class="geo">${d.districts || '—'}</td>
+    <td class="right">${d.pairs}</td>
+    <td class="right">${d.accts}</td>
+    <td class="right">${d.totAccts}</td>
+    ${pctCell(d.accts, d.totAccts)}
+    <td class="right"><strong>${fmt(d.cr)}</strong></td>
+    <td class="right">${fmt(d.reqs)}</td>
+    <td class="bar-cell">${singleBar(d.cr, max, 'bar-coco')}</td>
+  </tr>`).join('');
+}
+
+function renderDmSiSingle(tbody, data) {
+  const max = Math.max(...data.map(d => d.cr));
+  tbody.innerHTML = data.map((d, i) => `<tr>
+    <td>${rankBadge(i)}</td>
+    <td>${pairCell(d.dm, d.sem)}</td>
+    <td class="geo">${d.region || '—'}</td>
+    <td class="geo">${d.districts || '—'}</td>
+    <td class="right">${d.pairs}</td>
+    <td class="right">${d.accts}</td>
+    <td class="right">${d.totAccts}</td>
+    ${pctCell(d.accts, d.totAccts)}
+    <td class="right"><strong>${fmt(d.cr)}</strong></td>
+    <td class="right">${fmt(d.users)}</td>
+    <td class="right">${fmt(d.wau)}</td>
+    <td class="right">${fmt(d.siQ)}</td>
+    <td class="bar-cell">${singleBar(d.cr, max, 'bar-si')}</td>
+  </tr>`).join('');
+}
+
+function renderRvpCocoSingle(tbody, data) {
+  const max = Math.max(...data.map(d => d.cr));
+  tbody.innerHTML = data.map((d, i) => `<tr>
+    <td>${rankBadge(i)}</td>
+    <td>${pairCell(d.rvp, d.seDir)}</td>
+    <td class="geo">${d.region || '—'}</td>
+    <td class="right">${d.dmPairs}</td>
+    <td class="right">${d.accts}</td>
+    <td class="right">${d.totAccts}</td>
+    ${pctCell(d.accts, d.totAccts)}
+    <td class="right"><strong>${fmt(d.cr)}</strong></td>
+    <td class="right">${fmt(d.reqs)}</td>
+    <td class="bar-cell">${singleBar(d.cr, max, 'bar-coco')}</td>
+  </tr>`).join('');
+}
+
+function renderRvpSiSingle(tbody, data) {
+  const max = Math.max(...data.map(d => d.cr));
+  tbody.innerHTML = data.map((d, i) => `<tr>
+    <td>${rankBadge(i)}</td>
+    <td>${pairCell(d.rvp, d.seDir)}</td>
+    <td class="geo">${d.region || '—'}</td>
+    <td class="right">${d.dmPairs}</td>
+    <td class="right">${d.accts}</td>
+    <td class="right">${d.totAccts}</td>
+    ${pctCell(d.accts, d.totAccts)}
+    <td class="right"><strong>${fmt(d.cr)}</strong></td>
+    <td class="right">${fmt(d.users)}</td>
+    <td class="right">${fmt(d.wau)}</td>
+    <td class="right">${fmt(d.siQ)}</td>
+    <td class="bar-cell">${singleBar(d.cr, max, 'bar-si')}</td>
+  </tr>`).join('');
+}
+
+// Render all tables
+renderAeCocoSingle(document.getElementById('ae-coco-body'), aeCocoOnly);
+renderAeSiSingle(document.getElementById('ae-si-body'), aeSiOnly);
+renderDmCocoSingle(document.getElementById('dm-coco-body'), dmCocoOnly);
+renderDmSiSingle(document.getElementById('dm-si-body'), dmSiOnly);
+renderRvpCocoSingle(document.getElementById('rvp-coco-body'), rvpCocoOnly);
+renderRvpSiSingle(document.getElementById('rvp-si-body'), rvpSiOnly);
+
+// Tab switching
+function switchTab(e, panelId) {
+  const section = e.target.closest('.section');
+  section.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  section.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  e.target.classList.add('active');
+  document.getElementById(panelId).classList.add('active');
+}
+</script>
+</body>
+</html>
