@@ -406,7 +406,7 @@ base AS (
            {_mk("o.SALES_QUALIFIED_DATE")} AS MONTH_KEY, {_qk("o.SALES_QUALIFIED_DATE")} AS QUARTER_KEY
     FROM SALES.RAVEN.SDA_OPPORTUNITY_VIEW o
     LEFT JOIN se_attr se ON se.ACCOUNT_ID=o.SALESFORCE_ACCOUNT_ID
-    WHERE o.THEATER='AMSExpansion' AND o.DS=CURRENT_DATE() AND o.SALES_QUALIFIED_DATE>={_LOOKBACK}
+    WHERE o.THEATER='AMSExpansion' AND o.DS={_OPP_MAX_DS} AND o.SALES_QUALIFIED_DATE>={_LOOKBACK}
 ), expanded AS ({_expand("AE, SE, TOTAL_ACV")})
 SELECT AE, MAX(SE) AS SE, SUM(TOTAL_ACV) AS TACV_CREATED, COUNT(*) AS DEAL_COUNT, REGION, PERIOD_KEY
 FROM expanded GROUP BY AE, REGION, PERIOD_KEY ORDER BY TACV_CREATED DESC NULLS LAST"""
@@ -417,7 +417,7 @@ WITH base AS (
     SELECT DM, TOTAL_ACV, REGION,
            {_mk("SALES_QUALIFIED_DATE")} AS MONTH_KEY, {_qk("SALES_QUALIFIED_DATE")} AS QUARTER_KEY
     FROM SALES.RAVEN.SDA_OPPORTUNITY_VIEW
-    WHERE THEATER='AMSExpansion' AND DS=CURRENT_DATE() AND SALES_QUALIFIED_DATE>={_LOOKBACK}
+    WHERE THEATER='AMSExpansion' AND DS={_OPP_MAX_DS} AND SALES_QUALIFIED_DATE>={_LOOKBACK}
 ), expanded AS ({_expand("DM, TOTAL_ACV")})
 SELECT DM, SUM(TOTAL_ACV) AS TACV_CREATED, COUNT(*) AS DEAL_COUNT, REGION, PERIOD_KEY
 FROM expanded GROUP BY DM, REGION, PERIOD_KEY ORDER BY TACV_CREATED DESC NULLS LAST"""
@@ -689,9 +689,9 @@ def _top_uc_table(df, mode="ae"):
             dm = row.DM if hasattr(row, "DM") and row.DM and str(row.DM) != "nan" else "—"
             rows += f"""<tr>
               <td>{_rank(i)}</td>
-              <td class="primary">{dm}</td>
-              <td>{row.ACCOUNT_NAME}</td>
-              <td class="muted small">{row.USE_CASE_NAME}</td>
+              <td class="primary">{_esc(dm)}</td>
+              <td>{_esc(row.ACCOUNT_NAME)}</td>
+              <td class="muted small">{_esc(row.USE_CASE_NAME)}</td>
               <td class="right mono">{_fmt_acv(row.USE_CASE_ACV)}</td>
             </tr>"""
         return f"""<table class="lb-table">
@@ -706,10 +706,10 @@ def _top_uc_table(df, mode="ae"):
     for i, row in enumerate(_top_n_ties(df, "USE_CASE_ACV", 5).itertuples(), 1):
         rows += f"""<tr>
           <td>{_rank(i)}</td>
-          <td class="primary">{row.AE}</td>
-          <td class="muted">{row.SE}</td>
-          <td>{row.ACCOUNT_NAME}</td>
-          <td class="muted small">{row.USE_CASE_NAME}</td>
+          <td class="primary">{_esc(row.AE)}</td>
+          <td class="muted">{_esc(row.SE)}</td>
+          <td>{_esc(row.ACCOUNT_NAME)}</td>
+          <td class="muted small">{_esc(row.USE_CASE_NAME)}</td>
           <td class="right mono">{_fmt_acv(row.USE_CASE_ACV)}</td>
         </tr>"""
     return f"""<table class="lb-table">
@@ -727,7 +727,7 @@ def _meetings_table(df):
         cnt = row.MEETING_COUNT or 0
         rows += f"""<tr>
           <td>{_rank(i)}</td>
-          <td class="primary">{row.OWNER}</td>
+          <td class="primary">{_esc(row.OWNER)}</td>
           <td class="right">{int(cnt)}</td>
           {_bar(cnt, max_val, kind="meeting")}
         </tr>"""
@@ -761,15 +761,15 @@ def _consumption_table(df, sort_col, sort_label, is_pct=False, mode="ae"):
             rows += f"""<tr>
               <td>{_rank(i)}</td>
               <td>{_pair(row.AE, se)}</td>
-              <td>{row.ACCOUNT_NAME}</td>
+              <td>{_esc(row.ACCOUNT_NAME)}</td>
               <td class="right mono">{_fmt_acv(rev)}</td>
               {metric_td}
             </tr>"""
         else:
             rows += f"""<tr>
               <td>{_rank(i)}</td>
-              <td class="primary">{dm}</td>
-              <td>{row.ACCOUNT_NAME}</td>
+              <td class="primary">{_esc(dm)}</td>
+              <td>{_esc(row.ACCOUNT_NAME)}</td>
               <td class="right mono">{_fmt_acv(rev)}</td>
               {metric_td}
             </tr>"""
