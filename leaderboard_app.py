@@ -190,6 +190,9 @@ def _is_in_snowflake():
     except Exception:
         return False
 
+# Evaluated once at startup — never changes within a session
+_IN_SNOWFLAKE: bool = _is_in_snowflake()
+
 # ── Module-level cache — survives Streamlit re-runs, populated by worker threads ──
 _QUERY_CACHE: dict = {}
 _QUERY_CACHE_LOCK = threading.Lock()
@@ -210,7 +213,7 @@ def _get_thread_conn():
 
 def _execute_sql(sql: str) -> pd.DataFrame:
     """Run SQL on whatever execution context is available for this thread."""
-    if _is_in_snowflake():
+    if _IN_SNOWFLAKE:
         from snowflake.snowpark.context import get_active_session
         df = get_active_session().sql(sql).to_pandas()
         df.columns = [c.upper() for c in df.columns]
@@ -233,7 +236,13 @@ def _query_all(sql: str) -> pd.DataFrame:
             if now - ts < _CACHE_TTL:
                 return df
     df = _execute_sql(sql)
+    now = _time.monotonic()
     with _QUERY_CACHE_LOCK:
+        # Re-check: another thread may have populated the cache while we were executing
+        if sql in _QUERY_CACHE:
+            cached_df, ts = _QUERY_CACHE[sql]
+            if now - ts < _CACHE_TTL:
+                return cached_df
         _QUERY_CACHE[sql] = (df, now)
     return df
 
@@ -247,7 +256,7 @@ def _query(sql: str, region: str, period: str) -> pd.DataFrame:
 def _preload_parallel(sqls: list):
     """Fire all queries concurrently and populate the module cache.
     Falls back to sequential inside Snowflake SiS (no extra threads available)."""
-    if _is_in_snowflake():
+    if _IN_SNOWFLAKE:
         for sql in sqls:
             _query_all(sql)
         return
@@ -284,11 +293,6 @@ def _expand(cols):
         f"    UNION ALL\n"
         f"    SELECT {cols}, 'Theater' AS REGION, QUARTER_KEY AS PERIOD_KEY FROM base"
     )
-def _fmt_sql(e):
-    return (f"CASE WHEN ({e})>=1000000 THEN '$'||TRIM(TO_CHAR(ROUND(({e})/1000000.0,2),'FM0.00'))||'M' "
-            f"WHEN ({e})>=1000 THEN '$'||TRIM(TO_CHAR(ROUND(({e})/1000.0,0),'FM0'))||'K' "
-            f"ELSE '$'||TO_CHAR(ROUND(({e}),0)) END")
-
 # SetSail: derive AMSExpansion rep→region from current open pipeline.
 # CURRENT_DATE() doesn't work — SDA_OPPORTUNITY_VIEW lags by ~1 day, use MAX(DS).
 _OPP_MAX_DS = "(SELECT MAX(DS) FROM SALES.RAVEN.SDA_OPPORTUNITY_VIEW)"
@@ -438,33 +442,6 @@ base AS (
 SELECT AE, SE, ACCOUNT_NAME, USE_CASE_NAME, USE_CASE_ACV, DM, REGION, PERIOD_KEY
 FROM expanded ORDER BY USE_CASE_ACV DESC NULLS LAST"""
 
-def sql_ae_uc(t):
-    de, we = _uc_params(t)
-    return f"""
-WITH {_SE_ATTR_CTE},
-base AS (
-    SELECT u.OWNER_NAME AS AE, COALESCE(se.SALES_ENGINEER_NAME,'—') AS SE,
-           u.USE_CASE_ACV, u.REGION,
-           {_mk(de)} AS MONTH_KEY, {_qk(de)} AS QUARTER_KEY
-    FROM SALES.RAVEN.SDA_USE_CASE_VIEW u
-    LEFT JOIN se_attr se ON se.ACCOUNT_ID=u.SALESFORCE_ACCOUNT_ID
-    WHERE u.THEATER='AMSExpansion'{we} AND {de}>={_LOOKBACK}
-), expanded AS ({_expand("AE, SE, USE_CASE_ACV")})
-SELECT AE, MAX(SE) AS SE, SUM(USE_CASE_ACV) AS TOTAL_ACV, COUNT(*) AS UC_COUNT, REGION, PERIOD_KEY
-FROM expanded GROUP BY AE, REGION, PERIOD_KEY ORDER BY TOTAL_ACV DESC NULLS LAST"""
-
-def sql_dm_uc(t):
-    de, we = _uc_params(t)
-    return f"""
-WITH base AS (
-    SELECT DM, USE_CASE_ACV, REGION,
-           {_mk(de)} AS MONTH_KEY, {_qk(de)} AS QUARTER_KEY
-    FROM SALES.RAVEN.SDA_USE_CASE_VIEW
-    WHERE THEATER='AMSExpansion'{we} AND {de}>={_LOOKBACK}
-), expanded AS ({_expand("DM, USE_CASE_ACV")})
-SELECT DM, SUM(USE_CASE_ACV) AS TOTAL_ACV, COUNT(*) AS UC_COUNT, REGION, PERIOD_KEY
-FROM expanded GROUP BY DM, REGION, PERIOD_KEY ORDER BY TOTAL_ACV DESC NULLS LAST"""
-
 def sql_meetings_all():
     """Single query: all AMSExpansion meeting counts tagged with ROLE (AE/DM/SE).
     Scans SETSAIL_RAW_ACTIVITY once instead of three times."""
@@ -530,13 +507,12 @@ def _rank(i):
     return f'<span class="rank {cls}">{i}</span>'
 
 def _fmt_acv(val):
-    # Use &#36; (HTML entity) instead of $ to avoid Streamlit's LaTeX parser
     try: v = float(val)
-    except: return str(val) if val else "&#36;0"
-    if pd.isna(v) or v == 0: return "&#36;0"
-    if v >= 1_000_000: return f"&#36;{v/1_000_000:.2f}M"
-    if v >= 1_000:     return f"&#36;{round(v/1000):.0f}K"
-    return f"&#36;{v:.0f}"
+    except: return str(val) if val else "$0"
+    if pd.isna(v) or v == 0: return "$0"
+    if v >= 1_000_000: return f"${v/1_000_000:.2f}M"
+    if v >= 1_000:     return f"${round(v/1000):.0f}K"
+    return f"${v:.0f}"
 
 def _bar(val, max_val, kind="total", max_px=80):
     if not max_val or max_val == 0: return ""
@@ -977,10 +953,9 @@ with mc3:
 st.markdown('<div class="group-label">Consumption</div>', unsafe_allow_html=True)
 
 if is_quarterly:
-    st.markdown(_section("Consumption Growth",
+    st.html(_section("Consumption Growth",
         content='<p style="padding:16px;color:#64748b;font-size:13px">'
-                'Consumption data is monthly only — select a YYYY-MM period to view.</p>'),
-                unsafe_allow_html=True)
+                'Consumption data is monthly only — select a YYYY-MM period to view.</p>'))
 else:
     df_cons = _query(sql_consumption(), region, period)
     st.markdown('<div class="lb-section"><div class="section-header"><h2>Consumption Growth</h2>'
