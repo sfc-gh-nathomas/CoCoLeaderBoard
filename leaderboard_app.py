@@ -455,7 +455,8 @@ FROM expanded ORDER BY USE_CASE_ACV DESC NULLS LAST"""
 
 def sql_meetings_all():
     """Single query: all AMSExpansion meeting counts tagged with ROLE (AE/DM/SE).
-    Scans SETSAIL_RAW_ACTIVITY once instead of three times."""
+    Uses SDA_USER_ACCOUNT_ACTIVITY_MEETING_CALL_EMAIL_VIEW (accessible via RAVEN
+    PUBLIC schema grant — no SALES.ACTIVITY grant required)."""
     return f"""
 WITH {_setsail_reps_cte()},
 {_setsail_dms_cte()},
@@ -466,12 +467,11 @@ all_reps AS (
     UNION SELECT OWNER, REGION, 'SE' AS ROLE FROM amsexp_ses
 ),
 base AS (
-    SELECT s.OWNER_NAME AS OWNER, r.ROLE, 1 AS MEETING_COUNT, r.REGION,
+    SELECT s.OWNER, r.ROLE, s.ACTIVITY_COUNT AS MEETING_COUNT, r.REGION,
            {_mk("s.ACTIVITY_DATE")} AS MONTH_KEY, {_qk("s.ACTIVITY_DATE")} AS QUARTER_KEY
-    FROM SALES.ACTIVITY.SETSAIL_RAW_ACTIVITY s
-    JOIN all_reps r ON r.OWNER = s.OWNER_NAME
-    WHERE s.ACTIVITY_TYPE = 'MEETING' AND s.ACTIVITY_DATE >= {_LOOKBACK}
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY s.ACTIVITY_ID, s.OWNER_NAME ORDER BY 1) = 1
+    FROM SALES.RAVEN.SDA_USER_ACCOUNT_ACTIVITY_MEETING_CALL_EMAIL_VIEW s
+    JOIN all_reps r ON r.OWNER = s.OWNER
+    WHERE s.ACTIVITY_DATE >= {_LOOKBACK}
 ), expanded AS ({_expand("OWNER, ROLE, MEETING_COUNT")})
 SELECT OWNER, ROLE, SUM(MEETING_COUNT) AS MEETING_COUNT, REGION, PERIOD_KEY
 FROM expanded GROUP BY OWNER, ROLE, REGION, PERIOD_KEY ORDER BY MEETING_COUNT DESC NULLS LAST"""
@@ -479,17 +479,24 @@ FROM expanded GROUP BY OWNER, ROLE, REGION, PERIOD_KEY ORDER BY MEETING_COUNT DE
 def sql_consumption():
     return f"""
 WITH {_SE_ATTR_CTE},
+acct_dim AS (
+    SELECT SALESFORCE_ACCOUNT_ID, ACCOUNT_NAME, ACCOUNT_OWNER_NAME AS AE, DM, REGION
+    FROM SALES.RAVEN.SDA_OPPORTUNITY_VIEW
+    WHERE THEATER='AMSExpansion' AND DS={_OPP_MAX_DS}
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY SALESFORCE_ACCOUNT_ID
+                               ORDER BY SALES_QUALIFIED_DATE DESC NULLS LAST) = 1
+),
 monthly_revenue AS (
-    SELECT cr.salesforce_account_id, cr.salesforce_account_name AS ACCOUNT_NAME,
-           cr.salesforce_account_owner_name AS AE,
+    SELECT cr.SALESFORCE_ACCOUNT_ID, a.ACCOUNT_NAME, a.AE,
            COALESCE(se.SALES_ENGINEER_NAME, '—') AS SE,
-           cr.dm AS DM, cr.region AS REGION,
-           DATE_TRUNC('month', cr.general_date) AS month_year,
-           SUM(cr.total_product_revenue) AS monthly_revenue
-    FROM FINANCE.CUSTOMER.CONTRACT_REVENUE cr
-    LEFT JOIN se_attr se ON se.ACCOUNT_ID = cr.salesforce_account_id
-    WHERE cr.theater='AMSExpansion' AND DATE_TRUNC('month',cr.general_date)>={_LOOKBACK_CONSUMPTION}
-    GROUP BY 1,2,3,4,5,6,7
+           a.DM, a.REGION,
+           DATE_TRUNC('month', cr.GENERAL_DATE) AS month_year,
+           SUM(cr.TOTAL_REVENUE) AS monthly_revenue
+    FROM SALES.REPORTING.CORE_PRODUCT_CATEGORY_CONSUMPTION cr
+    JOIN acct_dim a ON a.SALESFORCE_ACCOUNT_ID = cr.SALESFORCE_ACCOUNT_ID
+    LEFT JOIN se_attr se ON se.ACCOUNT_ID = cr.SALESFORCE_ACCOUNT_ID
+    WHERE DATE_TRUNC('month', cr.GENERAL_DATE) >= {_LOOKBACK_CONSUMPTION}
+    GROUP BY 1, 2, 3, 4, 5, 6, 7
 ), with_lags AS (
     SELECT *, LAG(monthly_revenue) OVER (PARTITION BY salesforce_account_id ORDER BY month_year) AS prev_month_rev,
            LAG(monthly_revenue,12) OVER (PARTITION BY salesforce_account_id ORDER BY month_year) AS prev_year_rev
