@@ -255,15 +255,26 @@ def _query(sql: str, region: str, period: str) -> pd.DataFrame:
 
 def _preload_parallel(sqls: list):
     """Fire all queries concurrently and populate the module cache.
-    Falls back to sequential inside Snowflake SiS (no extra threads available)."""
+    Falls back to sequential inside Snowflake SiS (no extra threads available).
+    Query failures are cached as empty DataFrames so the app degrades gracefully
+    rather than crashing at startup on permission errors."""
     if _IN_SNOWFLAKE:
         for sql in sqls:
-            _query_all(sql)
+            try:
+                _query_all(sql)
+            except Exception:
+                with _QUERY_CACHE_LOCK:
+                    _QUERY_CACHE[sql] = (pd.DataFrame(), _time.monotonic())
         return
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         futures = {pool.submit(_query_all, sql): sql for sql in sqls}
         for fut in concurrent.futures.as_completed(futures):
-            fut.result()  # re-raise any exception so errors surface immediately
+            try:
+                fut.result()
+            except Exception:
+                failed_sql = futures[fut]
+                with _QUERY_CACHE_LOCK:
+                    _QUERY_CACHE[failed_sql] = (pd.DataFrame(), _time.monotonic())
 
 def _clear_cache():
     with _QUERY_CACHE_LOCK:
