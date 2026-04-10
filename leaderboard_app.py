@@ -212,12 +212,18 @@ def _get_thread_conn():
     return _thread_local.conn
 
 def _execute_sql(sql: str) -> pd.DataFrame:
-    """Run SQL on whatever execution context is available for this thread."""
-    if _IN_SNOWFLAKE:
+    """Run SQL on whatever execution context is available for this thread.
+    Always tries get_active_session() first at runtime (not the module-load-time
+    _IN_SNOWFLAKE flag) so SiS works even if the session wasn't ready at import."""
+    try:
         from snowflake.snowpark.context import get_active_session
-        df = get_active_session().sql(sql).to_pandas()
+        session = get_active_session()
+        df = session.sql(sql).to_pandas()
         df.columns = [c.upper() for c in df.columns]
         return df
+    except Exception:
+        pass
+    # Fall back to snowflake.connector (local development)
     conn = _get_thread_conn()
     cur = conn.cursor()
     try:
