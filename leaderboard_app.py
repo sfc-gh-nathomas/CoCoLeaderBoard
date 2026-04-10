@@ -169,8 +169,8 @@ def _period_options():
             fy_2d = ((y + 1) % 100) if m >= 2 else (y % 100)
             fq    = _fq_last[m]
             q_key = f"FY{fy_2d:02d}-Q{fq}"
-            # Don't add if the quarter's last month is still in the future/current month
-            if q_key not in quarters_added and not (y == today.year and m >= today.month):
+            # Don't add if the quarter's last month is still in the future (include in-progress)
+            if q_key not in quarters_added and not (y == today.year and m > today.month):
                 quarters_added.add(q_key)
                 options.append(q_key)
     return options
@@ -796,7 +796,7 @@ with st.sidebar:
                   if QUARTER_OPTIONS else None
 
     # Track which dropdown was last changed — that one sets the active period
-    if "active_period"  not in st.session_state: st.session_state.active_period  = sel_month
+    if "active_period"  not in st.session_state: st.session_state.active_period  = sel_quarter if sel_quarter else sel_month
     if "_prev_month"    not in st.session_state: st.session_state._prev_month    = sel_month
     if "_prev_quarter"  not in st.session_state: st.session_state._prev_quarter  = sel_quarter
 
