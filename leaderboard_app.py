@@ -252,12 +252,12 @@ def _query_all(sql: str) -> pd.DataFrame:
         _QUERY_CACHE[sql] = (df, now)
     return df
 
-def _query(sql: str, region: str, period: str) -> pd.DataFrame:
-    """Filter the cached full result to the selected region + period (pure Python — no DB call)."""
+def _query(sql: str, region: str, periods: list) -> pd.DataFrame:
+    """Filter the cached full result to the selected region + periods (pure Python — no DB call)."""
     df = _query_all(sql)
     if df.empty:
         return df
-    return df[(df["REGION"] == region) & (df["PERIOD_KEY"] == period)].reset_index(drop=True)
+    return df[df["REGION"].eq(region) & df["PERIOD_KEY"].isin(periods)].reset_index(drop=True)
 
 def _preload_parallel(sqls: list):
     """Fire all queries concurrently and populate the module cache.
@@ -792,7 +792,6 @@ def _consumption_table(df, sort_col, sort_label, is_pct=False, mode="ae"):
 PERIOD_OPTIONS  = _period_options()
 DEFAULT_PERIOD  = _default_period()
 MONTH_OPTIONS   = [p for p in PERIOD_OPTIONS if "FY" not in p]
-QUARTER_OPTIONS = [p for p in PERIOD_OPTIONS if "FY"     in p]
 
 with st.sidebar:
     st.markdown("## AMSExpansion\nPipeline Leaderboard")
@@ -800,36 +799,18 @@ with st.sidebar:
     region = st.selectbox("Region", _REGIONS, index=0)
     st.divider()
 
-    def_m_idx   = MONTH_OPTIONS.index(DEFAULT_PERIOD) if DEFAULT_PERIOD in MONTH_OPTIONS else 0
-    sel_month   = st.selectbox("Month",          MONTH_OPTIONS,   index=def_m_idx, key="sel_month")
-    sel_quarter = st.selectbox("Fiscal Quarter", QUARTER_OPTIONS, index=0,         key="sel_quarter") \
-                  if QUARTER_OPTIONS else None
+    def_months = [DEFAULT_PERIOD] if DEFAULT_PERIOD in MONTH_OPTIONS else [MONTH_OPTIONS[0]]
+    periods = st.multiselect("Month", MONTH_OPTIONS, default=def_months, key="sel_months")
+    if not periods:
+        periods = def_months
 
-    # Track which dropdown was last changed — that one sets the active period
-    if "active_period"  not in st.session_state: st.session_state.active_period  = sel_quarter if sel_quarter else sel_month
-    if "_prev_month"    not in st.session_state: st.session_state._prev_month    = sel_month
-    if "_prev_quarter"  not in st.session_state: st.session_state._prev_quarter  = sel_quarter
-
-    if sel_month != st.session_state._prev_month:
-        st.session_state.active_period = sel_month
-        st.session_state._prev_month   = sel_month
-    elif sel_quarter is not None and sel_quarter != st.session_state._prev_quarter:
-        st.session_state.active_period = sel_quarter
-        st.session_state._prev_quarter = sel_quarter
-
-    period = st.session_state.active_period
-    # Safety: reset if cached period rolled off the list (e.g. month cutover)
-    if period not in PERIOD_OPTIONS:
-        period = sel_month
-        st.session_state.active_period = period
-
-    is_quarterly = "FY" in period
     st.divider()
-    st.caption(f"{'Quarterly' if is_quarterly else 'Monthly'}: **{period}**")
+    lbl = ", ".join(periods) if len(periods) <= 2 else f"{len(periods)} months"
+    st.caption(f"**{lbl}**")
     if st.button("Refresh Data"):
         _clear_cache(); st.rerun()
 
-if region not in _REGIONS or period not in PERIOD_OPTIONS:
+if region not in _REGIONS or not periods:
     st.error("Invalid selection."); st.stop()
 
 # ── Parallel preload — all queries fire simultaneously on first load ──────────
@@ -849,7 +830,7 @@ if not all(sql in _QUERY_CACHE for sql in _PRELOAD_SQLS):
 
 # ── TEMPORARY DIAGNOSTICS — remove after debugging ───────────────────────────
 with st.expander("🔍 Debug", expanded=True):
-    st.write(f"**period** = `{period!r}`  **region** = `{region!r}`")
+    st.write(f"**periods** = `{periods!r}`  **region** = `{region!r}`")
     st.write(f"**cache keys**: {len(_QUERY_CACHE)}")
     _sql_t = sql_score_tacv_won()
     if _sql_t in _QUERY_CACHE:
@@ -900,26 +881,25 @@ region_label = "All Regions (Theater)" if region == "Theater" else region
 st.markdown(f"""
 <div class="lb-header">
   <h1>AMSExpansion Pipeline Leaderboard</h1>
-  <div class="subtitle">{region_label} &nbsp;|&nbsp; Period: {period}</div>
+  <div class="subtitle">{region_label} &nbsp;|&nbsp; {lbl}</div>
 </div>""", unsafe_allow_html=True)
 
 # ── Load scorecard data (all hits the module cache — no Snowflake round-trips) ─
-df_sw    = _query(sql_score_tacv_won(),    region, period)
-df_uc_cr = _query(sql_score_uc("created"), region, period)
-df_uc_wo = _query(sql_score_uc("won"),     region, period)
-df_uc_gl = _query(sql_score_uc("golive"),  region, period)
+df_sw    = _query(sql_score_tacv_won(),    region, periods)
+df_uc_cr = _query(sql_score_uc("created"), region, periods)
+df_uc_wo = _query(sql_score_uc("won"),     region, periods)
+df_uc_gl = _query(sql_score_uc("golive"),  region, periods)
 # Derive total AE meeting count from the unified meetings query (no extra DB call)
-_df_mtg_score = _query(sql_meetings_all(), region, period)
+_df_mtg_score = _query(sql_meetings_all(), region, periods)
 _total_meetings = int(
     _df_mtg_score.loc[_df_mtg_score["ROLE"] == "AE", "MEETING_COUNT"].sum()
 ) if not _df_mtg_score.empty else 0
 
 def _s(df, vcol, ccol=None):
     if df.empty or vcol not in df.columns: return "—", "—"
-    r = df.iloc[0]
-    raw = r.get(vcol, 0)
+    raw = pd.to_numeric(df[vcol], errors="coerce").sum()
     v = _fmt_acv(raw if raw is not None else 0)
-    c = f"{int(r.get(ccol, 0) or 0):,}" if ccol and ccol in df.columns else ""
+    c = f"{int(pd.to_numeric(df[ccol], errors='coerce').sum() or 0):,}" if ccol and ccol in df.columns else ""
     return v, c
 
 sw_v, sw_c   = _s(df_sw,    "TACV_WON",    "DEALS_WON")
@@ -943,11 +923,27 @@ st.markdown(f"""
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="group-label">TACV — Pipeline &amp; Bookings</div>', unsafe_allow_html=True)
 
-df_top_deals  = _query(sql_top_deals(),         region, period)
-df_ae_won     = _query(sql_ae_tacv_won(),        region, period)
-df_dm_won     = _query(sql_dm_tacv_won(),        region, period)
-df_ae_created = _query(sql_ae_tacv_created(),    region, period)
-df_dm_created = _query(sql_dm_tacv_created(),    region, period)
+df_top_deals  = _query(sql_top_deals(),         region, periods)
+df_ae_won     = _query(sql_ae_tacv_won(),        region, periods)
+if not df_ae_won.empty:
+    df_ae_won = (df_ae_won.groupby("AE", as_index=False)
+                 .agg({"SE": "first", "TACV_WON": "sum", "DEAL_COUNT": "sum"})
+                 .sort_values("TACV_WON", ascending=False).reset_index(drop=True))
+df_dm_won     = _query(sql_dm_tacv_won(),        region, periods)
+if not df_dm_won.empty:
+    df_dm_won = (df_dm_won.groupby("DM", as_index=False)
+                 .agg({"TACV_WON": "sum", "DEAL_COUNT": "sum"})
+                 .sort_values("TACV_WON", ascending=False).reset_index(drop=True))
+df_ae_created = _query(sql_ae_tacv_created(),    region, periods)
+if not df_ae_created.empty:
+    df_ae_created = (df_ae_created.groupby("AE", as_index=False)
+                     .agg({"SE": "first", "TACV_CREATED": "sum", "DEAL_COUNT": "sum"})
+                     .sort_values("TACV_CREATED", ascending=False).reset_index(drop=True))
+df_dm_created = _query(sql_dm_tacv_created(),    region, periods)
+if not df_dm_created.empty:
+    df_dm_created = (df_dm_created.groupby("DM", as_index=False)
+                     .agg({"TACV_CREATED": "sum", "DEAL_COUNT": "sum"})
+                     .sort_values("TACV_CREATED", ascending=False).reset_index(drop=True))
 
 # Top Deals + TACV leaderboard — one unified section
 st.markdown('<div class="lb-section"><div class="section-header"><h2>Top Deals</h2>'
@@ -983,7 +979,7 @@ with t5:
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="group-label">Use Cases</div>', unsafe_allow_html=True)
 
-df_uc_top = {t: _query(sql_top_uc(t), region, period) for t in ("created","won","golive")}
+df_uc_top = {t: _query(sql_top_uc(t), region, periods) for t in ("created","won","golive")}
 
 # Top UCs — toggle + single set of tabs
 st.markdown('<div class="lb-section"><div class="section-header"><h2>Top Use Cases</h2>'
@@ -1004,16 +1000,18 @@ with u3: st.html(_top_uc_table(df_uc_top["golive"],  mode=uc_mode))
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="group-label">Meetings</div>', unsafe_allow_html=True)
 
-df_mtg_all = _query(sql_meetings_all(), region, period)
+df_mtg_all = _query(sql_meetings_all(), region, periods)
 
-# Split into AE / DM / AE+SE views in Python — single DB scan
-df_mtg_ae  = df_mtg_all[df_mtg_all["ROLE"] == "AE"].drop(columns="ROLE") if not df_mtg_all.empty else df_mtg_all
-df_mtg_dm  = df_mtg_all[df_mtg_all["ROLE"] == "DM"].drop(columns="ROLE") if not df_mtg_all.empty else df_mtg_all
-df_mtg_ase = (df_mtg_all[df_mtg_all["ROLE"].isin(["AE", "SE"])]
-              .drop(columns="ROLE")
-              .groupby(["OWNER", "REGION", "PERIOD_KEY"], as_index=False)["MEETING_COUNT"].sum()
-              .sort_values("MEETING_COUNT", ascending=False)
-              if not df_mtg_all.empty else df_mtg_all)
+# Aggregate across all selected months before splitting by role
+def _agg_mtg(df, roles):
+    if df.empty: return df
+    return (df[df["ROLE"].isin(roles)]
+            .groupby(["OWNER", "REGION"], as_index=False)["MEETING_COUNT"].sum()
+            .sort_values("MEETING_COUNT", ascending=False).reset_index(drop=True))
+
+df_mtg_ae  = _agg_mtg(df_mtg_all, ["AE"])
+df_mtg_dm  = _agg_mtg(df_mtg_all, ["DM"])
+df_mtg_ase = _agg_mtg(df_mtg_all, ["AE", "SE"])
 
 mc1, mc2, mc3 = st.columns(3)
 with mc1:
@@ -1028,27 +1026,22 @@ with mc3:
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="group-label">Consumption</div>', unsafe_allow_html=True)
 
-if is_quarterly:
-    st.html(_section("Consumption Growth",
-        content='<p style="padding:16px;color:#64748b;font-size:13px">'
-                'Consumption data is monthly only — select a YYYY-MM period to view.</p>'))
-else:
-    df_cons = _query(sql_consumption(), region, period)
-    st.markdown('<div class="lb-section"><div class="section-header"><h2>Consumption Growth</h2>'
-                '<span class="badge">Top 5</span>'
-                '<span class="snote">Positive growth only</span></div></div>',
-                unsafe_allow_html=True)
-    cons_view = st.radio("View by", ["Top AEs", "Top DMs"], horizontal=True, key="cons_view",
-                         label_visibility="collapsed")
-    cons_mode = "ae" if cons_view == "Top AEs" else "dm"
-    c1, c2, c3, c4 = st.tabs(["MoM %", "MoM $", "YoY %", "YoY $"])
-    with c1: st.html(_consumption_table(df_cons, "MOM_PCT",   "MoM Growth %",  is_pct=True,  mode=cons_mode))
-    with c2: st.html(_consumption_table(df_cons, "MOM_DELTA", "MoM Growth $",  is_pct=False, mode=cons_mode))
-    with c3: st.html(_consumption_table(df_cons, "YOY_PCT",   "YoY Growth %",  is_pct=True,  mode=cons_mode))
-    with c4: st.html(_consumption_table(df_cons, "YOY_DELTA", "YoY Growth $",  is_pct=False, mode=cons_mode))
+df_cons = _query(sql_consumption(), region, [periods[0]])
+st.markdown('<div class="lb-section"><div class="section-header"><h2>Consumption Growth</h2>'
+            '<span class="badge">Top 5</span>'
+            '<span class="snote">Positive growth only</span></div></div>',
+            unsafe_allow_html=True)
+cons_view = st.radio("View by", ["Top AEs", "Top DMs"], horizontal=True, key="cons_view",
+                     label_visibility="collapsed")
+cons_mode = "ae" if cons_view == "Top AEs" else "dm"
+c1, c2, c3, c4 = st.tabs(["MoM %", "MoM $", "YoY %", "YoY $"])
+with c1: st.html(_consumption_table(df_cons, "MOM_PCT",   "MoM Growth %",  is_pct=True,  mode=cons_mode))
+with c2: st.html(_consumption_table(df_cons, "MOM_DELTA", "MoM Growth $",  is_pct=False, mode=cons_mode))
+with c3: st.html(_consumption_table(df_cons, "YOY_PCT",   "YoY Growth %",  is_pct=True,  mode=cons_mode))
+with c4: st.html(_consumption_table(df_cons, "YOY_DELTA", "YoY Growth $",  is_pct=False, mode=cons_mode))
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <div style="text-align:center;padding:20px;font-size:11px;color:#64748b">
-  AMSExpansion Pipeline Leaderboard &nbsp;·&nbsp; {region_label} &nbsp;·&nbsp; {period}
+  AMSExpansion Pipeline Leaderboard &nbsp;·&nbsp; {region_label} &nbsp;·&nbsp; {lbl}
 </div>""", unsafe_allow_html=True)
