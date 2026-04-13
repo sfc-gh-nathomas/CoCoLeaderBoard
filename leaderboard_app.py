@@ -855,12 +855,24 @@ with st.expander("🔍 Debug", expanded=True):
             st.write(f"PERIOD_KEY sample: `{sorted(_df_t['PERIOD_KEY'].unique())[:6]}`")
             st.write(f"REGION sample: `{sorted(_df_t['REGION'].unique())[:6]}`")
     else:
-        st.write("**TACV**: NOT IN CACHE — running direct query…")
-        try:
-            _df_d = _execute_sql(_sql_t)
-            st.write(f"Direct: {len(_df_d)} rows, cols={list(_df_d.columns)[:5]}")
-        except Exception as _e:
-            st.write(f"Direct ERROR: `{_e}`")
+        st.write("**TACV**: NOT IN CACHE")
+    # Check session context
+    try:
+        from snowflake.snowpark.context import get_active_session as _gas
+        _sess = _gas()
+        _ctx = _sess.sql("SELECT CURRENT_USER() AS U, CURRENT_ROLE() AS R").collect()
+        st.write(f"Session: user=`{_ctx[0]['U']}` role=`{_ctx[0]['R']}`")
+    except Exception as _e:
+        st.write(f"Session ERROR: `{_e}`")
+    # Direct test: count rows in the view
+    try:
+        _df_d = _execute_sql(
+            "SELECT COUNT(*) AS N FROM SALES.RAVEN.SDA_CLOSED_OPPORTUNITY_BOOKINGS_VIEW"
+            " WHERE THEATER='AMSExpansion'"
+        )
+        st.write(f"Direct row count: `{_df_d.iloc[0,0]}`")
+    except Exception as _e:
+        st.write(f"Direct count ERROR: `{_e}`")
 # ── END DIAGNOSTICS ───────────────────────────────────────────────────────────
 
 # ── Header ────────────────────────────────────────────────────────────────────
