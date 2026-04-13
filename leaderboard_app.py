@@ -870,9 +870,25 @@ with st.expander("🔍 Debug", expanded=True):
             "SELECT COUNT(*) AS N FROM SALES.RAVEN.SDA_CLOSED_OPPORTUNITY_BOOKINGS_VIEW"
             " WHERE THEATER='AMSExpansion'"
         )
-        st.write(f"Direct row count: `{_df_d.iloc[0,0]}`")
+        st.write(f"RAVEN bookings: `{_df_d.iloc[0,0]}`")
     except Exception as _e:
-        st.write(f"Direct count ERROR: `{_e}`")
+        st.write(f"RAVEN bookings ERROR: `{_e}`")
+    try:
+        _df_r = _execute_sql(
+            "SELECT COUNT(*) AS N FROM SALES.REPORTING.CORE_PRODUCT_CATEGORY_CONSUMPTION"
+            " WHERE SALESFORCE_ACCOUNT_ID IS NOT NULL"
+        )
+        st.write(f"REPORTING consumption: `{_df_r.iloc[0,0]}`")
+    except Exception as _e:
+        st.write(f"REPORTING consumption ERROR: `{_e}`")
+    try:
+        _df_o = _execute_sql(
+            "SELECT COUNT(*) AS N FROM SALES.RAVEN.SDA_OPPORTUNITY_VIEW"
+            " WHERE THEATER='AMSExpansion'"
+        )
+        st.write(f"RAVEN opp view: `{_df_o.iloc[0,0]}`")
+    except Exception as _e:
+        st.write(f"RAVEN opp view ERROR: `{_e}`")
 # ── END DIAGNOSTICS ───────────────────────────────────────────────────────────
 
 # ── Header ────────────────────────────────────────────────────────────────────
