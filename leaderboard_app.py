@@ -843,6 +843,26 @@ if not all(sql in _QUERY_CACHE for sql in _PRELOAD_SQLS):
     with st.spinner("Loading dashboard…"):
         _preload_parallel(_PRELOAD_SQLS)
 
+# ── TEMPORARY DIAGNOSTICS — remove after debugging ───────────────────────────
+with st.expander("🔍 Debug", expanded=True):
+    st.write(f"**period** = `{period!r}`  **region** = `{region!r}`")
+    st.write(f"**cache keys**: {len(_QUERY_CACHE)}")
+    _sql_t = sql_score_tacv_won()
+    if _sql_t in _QUERY_CACHE:
+        _df_t, _ts_t = _QUERY_CACHE[_sql_t]
+        st.write(f"**TACV cache**: {len(_df_t)} rows, age={_time.monotonic()-_ts_t:.0f}s")
+        if not _df_t.empty:
+            st.write(f"PERIOD_KEY sample: `{sorted(_df_t['PERIOD_KEY'].unique())[:6]}`")
+            st.write(f"REGION sample: `{sorted(_df_t['REGION'].unique())[:6]}`")
+    else:
+        st.write("**TACV**: NOT IN CACHE — running direct query…")
+        try:
+            _df_d = _execute_sql(_sql_t)
+            st.write(f"Direct: {len(_df_d)} rows, cols={list(_df_d.columns)[:5]}")
+        except Exception as _e:
+            st.write(f"Direct ERROR: `{_e}`")
+# ── END DIAGNOSTICS ───────────────────────────────────────────────────────────
+
 # ── Header ────────────────────────────────────────────────────────────────────
 region_label = "All Regions (Theater)" if region == "Theater" else region
 st.markdown(f"""
