@@ -264,7 +264,15 @@ def _preload_parallel(sqls: list):
     Falls back to sequential inside Snowflake SiS (no extra threads available).
     Query failures are cached as empty DataFrames so the app degrades gracefully
     rather than crashing at startup on permission errors."""
-    if _IN_SNOWFLAKE:
+    # Runtime check — same pattern as _execute_sql so we never misdetect SiS.
+    _in_sis = False
+    try:
+        from snowflake.snowpark.context import get_active_session
+        get_active_session()
+        _in_sis = True
+    except Exception:
+        pass
+    if _in_sis:
         for sql in sqls:
             try:
                 _query_all(sql)
