@@ -959,10 +959,6 @@ if not df_dm_created.empty:
                      .sort_values("TACV_CREATED", ascending=False).reset_index(drop=True))
 
 # Top Deals + TACV leaderboard — one unified section
-st.markdown('<div class="lb-section"><div class="section-header"><h2>Top Deals</h2>'
-            '<span class="badge">Top 5</span>'
-            '<span class="snote">Closed Won in period</span></div></div>',
-            unsafe_allow_html=True)
 # Build AE deal-count lookup for the TACV tab's Deals column
 ae_deal_counts = ({str(r.AE): int(r.DEAL_COUNT) for r in df_ae_won.itertuples()}
                   if not df_ae_won.empty else {})
@@ -995,10 +991,6 @@ st.markdown('<div class="group-label">Use Cases</div>', unsafe_allow_html=True)
 df_uc_top = {t: _query(sql_top_uc(t), region, periods) for t in ("created","won","golive")}
 
 # Top UCs — toggle + single set of tabs
-st.markdown('<div class="lb-section"><div class="section-header"><h2>Top Use Cases</h2>'
-            '<span class="badge">Top 5</span>'
-            '<span class="snote">By ACV in period</span></div></div>',
-            unsafe_allow_html=True)
 uc_view = st.radio("View by", ["Top AEs", "Top DMs"], horizontal=True, key="uc_view",
                    label_visibility="collapsed")
 u1, u2, u3 = st.tabs(["Created", "Won", "Go-Live"])
@@ -1040,10 +1032,6 @@ with mc3:
 st.markdown('<div class="group-label">Consumption</div>', unsafe_allow_html=True)
 
 df_cons = _query(sql_consumption(), region, [periods[0]])
-st.markdown('<div class="lb-section"><div class="section-header"><h2>Consumption Growth</h2>'
-            '<span class="badge">Top 5</span>'
-            '<span class="snote">Positive growth only</span></div></div>',
-            unsafe_allow_html=True)
 cons_view = st.radio("View by", ["Top AEs", "Top DMs"], horizontal=True, key="cons_view",
                      label_visibility="collapsed")
 cons_mode = "ae" if cons_view == "Top AEs" else "dm"
