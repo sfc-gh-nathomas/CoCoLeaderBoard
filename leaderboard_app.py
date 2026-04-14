@@ -68,11 +68,11 @@ st.markdown("""
   }
   .lb-header h1 {
     font-size: 28px; font-weight: 800; margin: 0 0 7px; letter-spacing: -0.5px;
-    text-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    color: #ffffff !important; text-shadow: 0 1px 4px rgba(0,0,0,0.35);
   }
   .lb-header .subtitle {
-    font-size: 13px; opacity: 0.9; font-weight: 500; letter-spacing: 0.3px;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    font-size: 13px; opacity: 0.95; font-weight: 500; letter-spacing: 0.3px;
+    color: #ffffff !important; text-shadow: 0 1px 3px rgba(0,0,0,0.25);
   }
 
   /* ── Summary cards ── */
