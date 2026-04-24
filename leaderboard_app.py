@@ -487,6 +487,17 @@ WITH base AS (
 SELECT DM, SUM(TOTAL_ACV) AS TACV_WON, COUNT(*) AS DEAL_COUNT, REGION, PERIOD_KEY
 FROM expanded GROUP BY DM, REGION, PERIOD_KEY ORDER BY TACV_WON DESC NULLS LAST"""
 
+def sql_ae_quota():
+    """Full-year FY27 TACV quota per AE from ATTAINMENT_SUMMARY."""
+    return """
+SELECT REP_NAME, SUM(FINAL_TACV_QUOTA) AS ANNUAL_QUOTA
+FROM SALES.ATTAINMENT.ATTAINMENT_SUMMARY
+WHERE THEATER='AMSExpansion'
+  AND QUOTA_ROLE='AE'
+  AND COMP_PLAN_START_DATE::DATE='2026-02-01'
+  AND FINAL_TACV_QUOTA IS NOT NULL
+GROUP BY REP_NAME"""
+
 def sql_ae_tacv_created():
     return f"""
 WITH {_SE_ATTR_CTE},
@@ -685,7 +696,7 @@ def _top_deals_table(df, sort_col, label, ae_deals=None):
       </tr></thead><tbody>{rows}</tbody></table>"""
 
 def _ae_leaderboard_table(df, val_col, count_col, val_label, count_label, se_col=None):
-    """AE leaderboard with rank, name/SE, value, count, progress bar."""
+    """AE leaderboard with rank, name/SE, value, optional quota+attainment, count, progress bar."""
     if df.empty:
         return f'<table class="lb-table"><tbody>{_empty_row(5)}</tbody></table>'
     df = df.copy()
@@ -693,24 +704,42 @@ def _ae_leaderboard_table(df, val_col, count_col, val_label, count_label, se_col
     df = df[df[val_col].fillna(0) > 0].reset_index(drop=True)
     if df.empty:
         return f'<table class="lb-table"><tbody>{_empty_row(5)}</tbody></table>'
+    has_quota = "ANNUAL_QUOTA" in df.columns and "ATTAINMENT_PCT" in df.columns
     max_val = df[val_col].max()
     rows = ""
     for i, row in enumerate(_top_n_ties(df, val_col, 5).itertuples(), 1):
-        val = getattr(row, val_col, 0) or 0
-        cnt = getattr(row, count_col, "") if count_col else ""
-        se  = getattr(row, se_col, None) if se_col else None
+        val  = getattr(row, val_col, 0) or 0
+        cnt  = getattr(row, count_col, "") if count_col else ""
+        se   = getattr(row, se_col, None) if se_col else None
         name = row.AE if hasattr(row, 'AE') else row.DM
+        quota_cells = ""
+        if has_quota:
+            quota = getattr(row, "ANNUAL_QUOTA", None)
+            pct   = getattr(row, "ATTAINMENT_PCT", None)
+            q_str = _fmt_acv(float(quota)) if quota and not pd.isna(quota) else "—"
+            if pct and not pd.isna(pct):
+                color = ("#22c55e" if pct >= 100
+                         else "#f97316" if pct >= 75
+                         else "#ef4444")
+                p_str = f'<span style="color:{color};font-weight:700">{pct:.0f}%</span>'
+            else:
+                p_str = "—"
+            quota_cells = f'<td class="right mono">{q_str}</td><td class="right">{p_str}</td>'
         rows += f"""<tr>
           <td>{_rank(i)}</td>
           <td>{_pair(name, se)}</td>
           <td class="right mono">{_fmt_acv(val)}</td>
+          {quota_cells}
           <td class="right">{int(cnt) if cnt else ""}</td>
           {_bar(val, max_val)}
         </tr>"""
+    quota_headers = '<th class="right">Quota</th><th class="right">Att%</th>' if has_quota else ""
+    ncols = 5 + (2 if has_quota else 0)
     return f"""<table class="lb-table">
       <thead><tr>
         <th style="width:36px">#</th><th>Name</th>
         <th class="right">{val_label}</th>
+        {quota_headers}
         <th class="right">{count_label}</th>
         <th class="bar-cell"></th>
       </tr></thead><tbody>{rows}</tbody></table>"""
@@ -882,7 +911,7 @@ _PRELOAD_SQLS = [
     sql_score_tacv_won(),
     sql_score_uc("created"), sql_score_uc("won"), sql_score_uc("golive"),
     sql_top_deals(),
-    sql_ae_tacv_won(),    sql_dm_tacv_won(),
+    sql_ae_tacv_won(),    sql_dm_tacv_won(),    sql_ae_quota(),
     sql_ae_tacv_created(), sql_dm_tacv_created(),
     sql_top_uc("created"), sql_top_uc("won"), sql_top_uc("golive"),
     sql_meetings_all(),
@@ -946,6 +975,14 @@ if not df_ae_won.empty:
     df_ae_won = (df_ae_won.groupby("AE", as_index=False)
                  .agg({"SE": "first", "TACV_WON": "sum", "DEAL_COUNT": "sum"})
                  .sort_values("TACV_WON", ascending=False).reset_index(drop=True))
+    # Join annual quota for attainment display (Option B: full-year quota as context)
+    _df_quota = _query_all(sql_ae_quota())
+    if not _df_quota.empty:
+        _quota_map = dict(zip(_df_quota["REP_NAME"], pd.to_numeric(_df_quota["ANNUAL_QUOTA"], errors="coerce")))
+        df_ae_won["ANNUAL_QUOTA"] = df_ae_won["AE"].map(_quota_map)
+        df_ae_won["ATTAINMENT_PCT"] = (
+            df_ae_won["TACV_WON"] / df_ae_won["ANNUAL_QUOTA"] * 100
+        ).where(df_ae_won["ANNUAL_QUOTA"].fillna(0) > 0)
 df_dm_won     = _query(sql_dm_tacv_won(),        region, periods)
 if not df_dm_won.empty:
     df_dm_won = (df_dm_won.groupby("DM", as_index=False)
