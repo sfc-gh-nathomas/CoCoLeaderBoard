@@ -1070,6 +1070,21 @@ if not df_dm_created.empty:
 # Build AE deal-count lookup for the TACV tab's Deals column
 ae_deal_counts = ({str(r.AE): int(r.DEAL_COUNT) for r in df_ae_won.itertuples()}
                   if not df_ae_won.empty else {})
+# Build DM-aggregated TCV and Growth ACV tables for DM mode on t2/t3
+if not df_top_deals.empty:
+    _td = df_top_deals.copy()
+    _td["DM"] = _td["DM"].str.strip()
+    _td["NET_TCV"]    = pd.to_numeric(_td["NET_TCV"],    errors="coerce").fillna(0)
+    _td["GROWTH_ACV"] = pd.to_numeric(_td["GROWTH_ACV"], errors="coerce").fillna(0)
+    df_dm_tcv = (_td.groupby("DM", as_index=False)
+                 .agg(TCV_WON=("NET_TCV", "sum"), DEAL_COUNT=("NET_TCV", "count"))
+                 .sort_values("TCV_WON", ascending=False).reset_index(drop=True))
+    df_dm_growth = (_td.groupby("DM", as_index=False)
+                    .agg(GROWTH_ACV_WON=("GROWTH_ACV", "sum"), DEAL_COUNT=("GROWTH_ACV", "count"))
+                    .sort_values("GROWTH_ACV_WON", ascending=False).reset_index(drop=True))
+else:
+    df_dm_tcv   = pd.DataFrame()
+    df_dm_growth = pd.DataFrame()
 tacv_view = st.radio("View by", ["Top AEs", "Top DMs"], horizontal=True, key="tacv_view",
                      label_visibility="collapsed")
 t1, t2, t3, t4, t5 = st.tabs(["TACV", "TCV", "Growth ACV", "Won", "Created"])
@@ -1082,12 +1097,12 @@ with t2:
     if tacv_view == "Top AEs":
         st.html(_top_deals_table(df_top_deals, "NET_TCV",    "TCV",        ae_deals=ae_deal_counts, ae_attainment=_ae_attainment_map, secondary_col="TOTAL_ACV", secondary_label="TACV"))
     else:
-        st.html(_top_deals_table(df_top_deals, "NET_TCV",    "TCV"))
+        st.html(_dm_leaderboard_table(df_dm_tcv, "TCV_WON", "DEAL_COUNT", "TCV Won", "Deals", dm_attainment=_dm_attainment_map))
 with t3:
     if tacv_view == "Top AEs":
         st.html(_top_deals_table(df_top_deals, "GROWTH_ACV", "Growth ACV", ae_deals=ae_deal_counts, ae_attainment=_ae_attainment_map, secondary_col="TOTAL_ACV", secondary_label="TACV"))
     else:
-        st.html(_top_deals_table(df_top_deals, "GROWTH_ACV", "Growth ACV"))
+        st.html(_dm_leaderboard_table(df_dm_growth, "GROWTH_ACV_WON", "DEAL_COUNT", "Growth ACV Won", "Deals", dm_attainment=_dm_attainment_map))
 with t4:
     if tacv_view == "Top AEs":
         st.html(_ae_leaderboard_table(df_ae_won, "TACV_WON", "DEAL_COUNT",
