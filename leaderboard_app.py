@@ -451,14 +451,15 @@ def sql_top_deals():
 WITH {_SE_ATTR_CTE},
 base AS (
     SELECT o.REP_NAME AS AE, COALESCE(se.SALES_ENGINEER_NAME,'—') AS SE, o.ACCOUNT_NAME,
+           o.OPPORTUNITY_NAME,
            o.TOTAL_ACV, o.TCV AS NET_TCV, o.GROWTH_ACV, o.DM, o.REGION,
            {_mk("o.CLOSE_DATE::DATE")} AS MONTH_KEY, {_qk("o.CLOSE_DATE::DATE")} AS QUARTER_KEY
     FROM SALES.REPORTING.CORE_OPPORTUNITY_POST_SPLIT o
     LEFT JOIN se_attr se ON se.ACCOUNT_ID=o.ACCOUNT_ID
     WHERE o.THEATER='AMSExpansion' AND o.IS_CLOSED=TRUE AND o.IS_WON=TRUE
       AND o.DS={_OPP_MAX_DS} AND o.CLOSE_DATE::DATE>={_LOOKBACK} AND o.TOTAL_ACV>0
-), expanded AS ({_expand("AE, SE, ACCOUNT_NAME, TOTAL_ACV, NET_TCV, GROWTH_ACV, DM")})
-SELECT AE, SE, ACCOUNT_NAME, TOTAL_ACV, NET_TCV, GROWTH_ACV, DM, REGION, PERIOD_KEY
+), expanded AS ({_expand("AE, SE, ACCOUNT_NAME, OPPORTUNITY_NAME, TOTAL_ACV, NET_TCV, GROWTH_ACV, DM")})
+SELECT AE, SE, ACCOUNT_NAME, OPPORTUNITY_NAME, TOTAL_ACV, NET_TCV, GROWTH_ACV, DM, REGION, PERIOD_KEY
 FROM expanded"""
 
 def sql_ae_tacv_won():
@@ -490,13 +491,13 @@ FROM expanded GROUP BY DM, REGION, PERIOD_KEY ORDER BY TACV_WON DESC NULLS LAST"
 def sql_ae_quota():
     """Full-year FY27 TACV quota per AE from ATTAINMENT_SUMMARY."""
     return """
-SELECT REP_NAME, SUM(FINAL_TACV_QUOTA) AS ANNUAL_QUOTA
+SELECT REP_NAME, QUOTA_ROLE, SUM(FINAL_TACV_QUOTA) AS ANNUAL_QUOTA
 FROM SALES.ATTAINMENT.ATTAINMENT_SUMMARY
 WHERE THEATER='AMSExpansion'
-  AND QUOTA_ROLE='AE'
+  AND QUOTA_ROLE IN ('AE', 'DM')
   AND COMP_PLAN_START_DATE::DATE='2026-02-01'
   AND FINAL_TACV_QUOTA IS NOT NULL
-GROUP BY REP_NAME"""
+GROUP BY REP_NAME, QUOTA_ROLE"""
 
 def sql_ae_tacv_created():
     return f"""
@@ -662,10 +663,15 @@ def _top_n_ties(df, col, n):
 
 
 # ── Table builders ────────────────────────────────────────────────────────────
-def _top_deals_table(df, sort_col, label, ae_deals=None):
+def _top_deals_table(df, sort_col, label, ae_deals=None, ae_attainment=None,
+                     secondary_col=None, secondary_label=None):
     """Top 5 deals table (TACV / TCV / Growth ACV).
-    ae_deals: optional dict {AE name -> deal count} to add a Deals column."""
-    ncols = 5 if ae_deals is not None else 4
+    ae_deals: optional dict {AE name -> deal count} to add a Deals column.
+    ae_attainment: optional dict {AE name -> (quota, pct)} to add Quota + Att% columns.
+    secondary_col/secondary_label: optional extra value column (e.g. show TACV alongside TCV)."""
+    has_att = ae_attainment is not None and len(ae_attainment) > 0
+    has_sec = secondary_col is not None
+    ncols = 4 + (1 if ae_deals is not None else 0) + (2 if has_att else 0) + (1 if has_sec else 0)
     if df.empty:
         return f'<table class="lb-table"><tbody>{_empty_row(ncols)}</tbody></table>'
     # Exclude zero/null values for the sort column (e.g. $0 Growth ACV deals)
@@ -681,18 +687,37 @@ def _top_deals_table(df, sort_col, label, ae_deals=None):
         if ae_deals is not None:
             cnt = ae_deals.get(str(row.AE), "")
             deals_td = f'<td class="right">{cnt}</td>'
+        att_cells = ""
+        if has_att:
+            entry = ae_attainment.get(str(row.AE))
+            if entry:
+                q, p = entry
+                q_str = _fmt_acv(q)
+                if p is not None:
+                    color = ("#22c55e" if p >= 100 else "#f97316" if p >= 75 else "#ef4444")
+                    p_str = f'<span style="color:{color};font-weight:700">{p:.0f}%</span>'
+                else:
+                    p_str = "—"
+            else:
+                q_str, p_str = "—", "—"
+            att_cells = f'<td class="right mono">{q_str}</td><td class="right">{p_str}</td>'
         rows += f"""<tr>
           <td>{_rank(i)}</td>
           <td>{_pair(row.AE, row.SE)}</td>
           <td>{_esc(row.ACCOUNT_NAME)}</td>
+          <td>{_esc(row.OPPORTUNITY_NAME)}</td>
           <td class="right mono">{_fmt_acv(amt)}</td>
+          {f'<td class="right mono">{_fmt_acv(getattr(row, secondary_col, None))}</td>' if has_sec else ""}
+          {att_cells}
           {deals_td}
         </tr>"""
     deals_th = '<th class="right">Deals</th>' if ae_deals is not None else ""
+    att_ths  = '<th class="right">Quota</th><th class="right">Att%</th>' if has_att else ""
+    sec_th   = f'<th class="right">{secondary_label or secondary_col}</th>' if has_sec else ""
     return f"""<table class="lb-table">
       <thead><tr>
-        <th style="width:36px">#</th><th>AE / SE</th><th>Account</th>
-        <th class="right">{label}</th>{deals_th}
+        <th style="width:36px">#</th><th>AE / SE</th><th>Account</th><th>Opportunity</th>
+        <th class="right">{label}</th>{sec_th}{att_ths}{deals_th}
       </tr></thead><tbody>{rows}</tbody></table>"""
 
 def _ae_leaderboard_table(df, val_col, count_col, val_label, count_label, se_col=None):
@@ -734,7 +759,6 @@ def _ae_leaderboard_table(df, val_col, count_col, val_label, count_label, se_col
           {_bar(val, max_val)}
         </tr>"""
     quota_headers = '<th class="right">Quota</th><th class="right">Att%</th>' if has_quota else ""
-    ncols = 5 + (2 if has_quota else 0)
     return f"""<table class="lb-table">
       <thead><tr>
         <th style="width:36px">#</th><th>Name</th>
@@ -744,8 +768,8 @@ def _ae_leaderboard_table(df, val_col, count_col, val_label, count_label, se_col
         <th class="bar-cell"></th>
       </tr></thead><tbody>{rows}</tbody></table>"""
 
-def _dm_leaderboard_table(df, val_col, count_col, val_label, count_label):
-    """DM leaderboard (no SE column)."""
+def _dm_leaderboard_table(df, val_col, count_col, val_label, count_label, dm_attainment=None):
+    """DM leaderboard (no SE column). dm_attainment: dict DM -> (quota, pct|None)."""
     if df.empty:
         return f'<table class="lb-table"><tbody>{_empty_row(5)}</tbody></table>'
     df = df.copy()
@@ -753,22 +777,40 @@ def _dm_leaderboard_table(df, val_col, count_col, val_label, count_label):
     df = df[df[val_col].fillna(0) > 0].reset_index(drop=True)
     if df.empty:
         return f'<table class="lb-table"><tbody>{_empty_row(5)}</tbody></table>'
+    has_quota = bool(dm_attainment)
     max_val = df[val_col].max()
     rows = ""
     for i, row in enumerate(_top_n_ties(df, val_col, 5).itertuples(), 1):
         val = getattr(row, val_col, 0) or 0
         cnt = getattr(row, count_col, "") if count_col else ""
+        quota_cells = ""
+        if has_quota:
+            att = dm_attainment.get(row.DM)
+            if att:
+                quota, pct = att
+                q_str = _fmt_acv(quota)
+                if pct is not None:
+                    color = ("#22c55e" if pct >= 100 else "#f97316" if pct >= 75 else "#ef4444")
+                    p_str = f'<span style="color:{color};font-weight:700">{pct:.0f}%</span>'
+                else:
+                    p_str = "—"
+            else:
+                q_str, p_str = "—", "—"
+            quota_cells = f'<td class="right mono">{q_str}</td><td class="right">{p_str}</td>'
         rows += f"""<tr>
           <td>{_rank(i)}</td>
           <td class="primary">{_esc(row.DM)}</td>
           <td class="right mono">{_fmt_acv(val)}</td>
+          {quota_cells}
           <td class="right">{int(cnt) if cnt else ""}</td>
           {_bar(val, max_val)}
         </tr>"""
+    quota_headers = '<th class="right">Quota</th><th class="right">Att%</th>' if has_quota else ""
     return f"""<table class="lb-table">
       <thead><tr>
         <th style="width:36px">#</th><th>DM</th>
         <th class="right">{val_label}</th>
+        {quota_headers}
         <th class="right">{count_label}</th>
         <th class="bar-cell"></th>
       </tr></thead><tbody>{rows}</tbody></table>"""
@@ -970,24 +1012,54 @@ st.markdown(f"""
 st.markdown('<div class="group-label">TACV — Pipeline &amp; Bookings</div>', unsafe_allow_html=True)
 
 df_top_deals  = _query(sql_top_deals(),         region, periods)
+_ae_attainment_map = {}  # populated below after quota join
+_dm_attainment_map = {}  # populated below after quota join
+# Load quota data once — used for both AE and DM processing
+_df_quota = _query_all(sql_ae_quota())
 df_ae_won     = _query(sql_ae_tacv_won(),        region, periods)
 if not df_ae_won.empty:
     df_ae_won = (df_ae_won.groupby("AE", as_index=False)
                  .agg({"SE": "first", "TACV_WON": "sum", "DEAL_COUNT": "sum"})
                  .sort_values("TACV_WON", ascending=False).reset_index(drop=True))
     # Join annual quota for attainment display (Option B: full-year quota as context)
-    _df_quota = _query_all(sql_ae_quota())
     if not _df_quota.empty:
         _quota_map = dict(zip(_df_quota["REP_NAME"], pd.to_numeric(_df_quota["ANNUAL_QUOTA"], errors="coerce")))
         df_ae_won["ANNUAL_QUOTA"] = df_ae_won["AE"].map(_quota_map)
         df_ae_won["ATTAINMENT_PCT"] = (
             df_ae_won["TACV_WON"] / df_ae_won["ANNUAL_QUOTA"] * 100
         ).where(df_ae_won["ANNUAL_QUOTA"].fillna(0) > 0)
+    # Build attainment map for top deals table BEFORE filtering DMs
+    _ae_attainment_map = {}
+    for _r in df_ae_won.itertuples():
+        _q = getattr(_r, "ANNUAL_QUOTA", None)
+        _p = getattr(_r, "ATTAINMENT_PCT", None)
+        if _q is not None and not pd.isna(_q):
+            _ae_attainment_map[_r.AE] = (float(_q), float(_p) if _p is not None and not pd.isna(_p) else None)
+    # Remove DMs from the AE leaderboard (they have their own DM view)
+    if not _df_quota.empty and "QUOTA_ROLE" in _df_quota.columns:
+        _dm_names = set(_df_quota[_df_quota["QUOTA_ROLE"] == "DM"]["REP_NAME"])
+        df_ae_won = df_ae_won[~df_ae_won["AE"].isin(_dm_names)].reset_index(drop=True)
 df_dm_won     = _query(sql_dm_tacv_won(),        region, periods)
 if not df_dm_won.empty:
     df_dm_won = (df_dm_won.groupby("DM", as_index=False)
                  .agg({"TACV_WON": "sum", "DEAL_COUNT": "sum"})
                  .sort_values("TACV_WON", ascending=False).reset_index(drop=True))
+    # Normalize DM names to avoid whitespace mismatches between tables
+    df_dm_won["DM"] = df_dm_won["DM"].str.strip()
+    # Join DM quota for attainment display
+    if not _df_quota.empty:
+        _dm_quota_rows = _df_quota[_df_quota["QUOTA_ROLE"] == "DM"]
+        _dm_quota_map  = dict(zip(_dm_quota_rows["REP_NAME"].str.strip(), pd.to_numeric(_dm_quota_rows["ANNUAL_QUOTA"], errors="coerce")))
+        df_dm_won["ANNUAL_QUOTA"]   = df_dm_won["DM"].map(_dm_quota_map)
+        df_dm_won["ATTAINMENT_PCT"] = (
+            df_dm_won["TACV_WON"] / df_dm_won["ANNUAL_QUOTA"] * 100
+        ).where(df_dm_won["ANNUAL_QUOTA"].fillna(0) > 0)
+    # Build attainment map for DM leaderboard
+    for _r in df_dm_won.itertuples():
+        _q = getattr(_r, "ANNUAL_QUOTA", None)
+        _p = getattr(_r, "ATTAINMENT_PCT", None)
+        if _q is not None and not pd.isna(_q):
+            _dm_attainment_map[_r.DM] = (float(_q), float(_p) if _p is not None and not pd.isna(_p) else None)
 df_ae_created = _query(sql_ae_tacv_created(),    region, periods)
 if not df_ae_created.empty:
     df_ae_created = (df_ae_created.groupby("AE", as_index=False)
@@ -1006,16 +1078,28 @@ ae_deal_counts = ({str(r.AE): int(r.DEAL_COUNT) for r in df_ae_won.itertuples()}
 tacv_view = st.radio("View by", ["Top AEs", "Top DMs"], horizontal=True, key="tacv_view",
                      label_visibility="collapsed")
 t1, t2, t3, t4, t5 = st.tabs(["TACV", "TCV", "Growth ACV", "Won", "Created"])
-with t1: st.html(_top_deals_table(df_top_deals, "TOTAL_ACV",  "TACV",       ae_deals=ae_deal_counts))
-with t2: st.html(_top_deals_table(df_top_deals, "NET_TCV",    "TCV"))
-with t3: st.html(_top_deals_table(df_top_deals, "GROWTH_ACV", "Growth ACV"))
+with t1:
+    if tacv_view == "Top AEs":
+        st.html(_top_deals_table(df_top_deals, "TOTAL_ACV",  "TACV",       ae_deals=ae_deal_counts, ae_attainment=_ae_attainment_map))
+    else:
+        st.html(_dm_leaderboard_table(df_dm_won, "TACV_WON", "DEAL_COUNT", "TACV Won", "Deals", dm_attainment=_dm_attainment_map))
+with t2:
+    if tacv_view == "Top AEs":
+        st.html(_top_deals_table(df_top_deals, "NET_TCV",    "TCV",        ae_deals=ae_deal_counts, ae_attainment=_ae_attainment_map, secondary_col="TOTAL_ACV", secondary_label="TACV"))
+    else:
+        st.html(_top_deals_table(df_top_deals, "NET_TCV",    "TCV"))
+with t3:
+    if tacv_view == "Top AEs":
+        st.html(_top_deals_table(df_top_deals, "GROWTH_ACV", "Growth ACV", ae_deals=ae_deal_counts, ae_attainment=_ae_attainment_map, secondary_col="TOTAL_ACV", secondary_label="TACV"))
+    else:
+        st.html(_top_deals_table(df_top_deals, "GROWTH_ACV", "Growth ACV"))
 with t4:
     if tacv_view == "Top AEs":
         st.html(_ae_leaderboard_table(df_ae_won, "TACV_WON", "DEAL_COUNT",
                                       "TACV Won", "Deals", se_col="SE"))
     else:
         st.html(_dm_leaderboard_table(df_dm_won, "TACV_WON", "DEAL_COUNT",
-                                      "TACV Won", "Deals"))
+                                      "TACV Won", "Deals", dm_attainment=_dm_attainment_map))
 with t5:
     if tacv_view == "Top AEs":
         st.html(_ae_leaderboard_table(df_ae_created, "TACV_CREATED", "DEAL_COUNT",
