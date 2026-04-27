@@ -476,6 +476,20 @@ base AS (
 SELECT AE, MAX(SE) AS SE, SUM(TOTAL_ACV) AS TACV_WON, COUNT(*) AS DEAL_COUNT, REGION, PERIOD_KEY
 FROM expanded GROUP BY AE, REGION, PERIOD_KEY ORDER BY TACV_WON DESC NULLS LAST"""
 
+def sql_se_tacv_won():
+    return f"""
+WITH {_SE_ATTR_CTE},
+base AS (
+    SELECT se.SALES_ENGINEER_NAME AS SE, o.TOTAL_ACV, o.REGION,
+           {_mk("o.CLOSE_DATE::DATE")} AS MONTH_KEY, {_qk("o.CLOSE_DATE::DATE")} AS QUARTER_KEY
+    FROM SALES.REPORTING.CORE_OPPORTUNITY_POST_SPLIT o
+    JOIN se_attr se ON se.ACCOUNT_ID=o.ACCOUNT_ID
+    WHERE o.THEATER='AMSExpansion' AND o.IS_CLOSED=TRUE AND o.IS_WON=TRUE
+      AND o.DS={_OPP_MAX_DS} AND o.CLOSE_DATE::DATE>={_LOOKBACK} AND o.TOTAL_ACV>0
+), expanded AS ({_expand("SE, TOTAL_ACV")})
+SELECT SE, SUM(TOTAL_ACV) AS TACV_WON, COUNT(*) AS DEAL_COUNT, REGION, PERIOD_KEY
+FROM expanded GROUP BY SE, REGION, PERIOD_KEY ORDER BY TACV_WON DESC NULLS LAST"""
+
 def sql_dm_tacv_won():
     return f"""
 WITH base AS (
@@ -810,6 +824,38 @@ def _dm_leaderboard_table(df, val_col, count_col, val_label, count_label, dm_att
         <th class="bar-cell"></th>
       </tr></thead><tbody>{rows}</tbody></table>"""
 
+def _attainment_leaderboard_table(attainment_map, df_won, won_col, name_col):
+    """Top 5 by Attainment %, sorted descending. Columns: # | Name | TACV Won | Quota | Att%."""
+    if not attainment_map:
+        return f'<table class="lb-table"><tbody>{_empty_row(4)}</tbody></table>'
+    won_lookup = {}
+    if not df_won.empty and name_col in df_won.columns and won_col in df_won.columns:
+        won_lookup = dict(zip(df_won[name_col], pd.to_numeric(df_won[won_col], errors="coerce").fillna(0)))
+    rows_data = [(name, won_lookup.get(name, 0), quota, pct)
+                 for name, (quota, pct) in attainment_map.items() if pct is not None]
+    if not rows_data:
+        return f'<table class="lb-table"><tbody>{_empty_row(4)}</tbody></table>'
+    rows_data.sort(key=lambda x: x[3], reverse=True)
+    rows_data = rows_data[:5]
+    rows = ""
+    for i, (name, tacv, quota, pct) in enumerate(rows_data, 1):
+        color = ("#22c55e" if pct >= 100 else "#f97316" if pct >= 75 else "#ef4444")
+        p_str = f'<span style="color:{color};font-weight:700">{pct:.0f}%</span>'
+        rows += f"""<tr>
+          <td>{_rank(i)}</td>
+          <td class="primary">{_esc(name)}</td>
+          <td class="right mono">{_fmt_acv(tacv)}</td>
+          <td class="right mono">{_fmt_acv(quota)}</td>
+          <td class="right">{p_str}</td>
+        </tr>"""
+    return f"""<table class="lb-table">
+      <thead><tr>
+        <th style="width:36px">#</th><th>Name</th>
+        <th class="right">TACV Won</th>
+        <th class="right">Quota</th>
+        <th class="right">Att%</th>
+      </tr></thead><tbody>{rows}</tbody></table>"""
+
 def _top_uc_table(df, mode="ae"):
     """Top use cases detail table.
     mode='ae': show AE / SE / Account / Use Case / ACV
@@ -1055,6 +1101,25 @@ if not df_dm_won.empty:
         _p = getattr(_r, "ATTAINMENT_PCT", None)
         if _q is not None and not pd.isna(_q):
             _dm_attainment_map[_r.DM] = (float(_q), float(_p) if _p is not None and not pd.isna(_p) else None)
+_se_attainment_map = {}
+df_se_won = _query(sql_se_tacv_won(), region, periods)
+if not df_se_won.empty:
+    df_se_won = (df_se_won.groupby("SE", as_index=False)
+                 .agg({"TACV_WON": "sum", "DEAL_COUNT": "sum"})
+                 .sort_values("TACV_WON", ascending=False).reset_index(drop=True))
+    df_se_won["SE"] = df_se_won["SE"].str.strip()
+    if not _df_quota.empty:
+        _se_quota_rows = _df_quota[_df_quota["QUOTA_ROLE"] == "Team SE"]
+        _se_quota_map  = dict(zip(_se_quota_rows["REP_NAME"].str.strip(), pd.to_numeric(_se_quota_rows["ANNUAL_QUOTA"], errors="coerce")))
+        df_se_won["ANNUAL_QUOTA"]   = df_se_won["SE"].map(_se_quota_map)
+        df_se_won["ATTAINMENT_PCT"] = (
+            df_se_won["TACV_WON"] / df_se_won["ANNUAL_QUOTA"] * 100
+        ).where(df_se_won["ANNUAL_QUOTA"].fillna(0) > 0)
+    for _r in df_se_won.itertuples():
+        _q = getattr(_r, "ANNUAL_QUOTA", None)
+        _p = getattr(_r, "ATTAINMENT_PCT", None)
+        if _q is not None and not pd.isna(_q):
+            _se_attainment_map[_r.SE] = (float(_q), float(_p) if _p is not None and not pd.isna(_p) else None)
 df_ae_created = _query(sql_ae_tacv_created(),    region, periods)
 if not df_ae_created.empty:
     df_ae_created = (df_ae_created.groupby("AE", as_index=False)
@@ -1117,6 +1182,19 @@ with t5:
     else:
         st.html(_dm_leaderboard_table(df_dm_created, "TACV_CREATED", "DEAL_COUNT",
                                       "TACV Created", "Deals"))
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ATTAINMENT LEADERS
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="group-label">Attainment Leaders</div>', unsafe_allow_html=True)
+
+_att_col1, _att_col2 = st.columns(2)
+with _att_col1:
+    st.html(_section("Top AEs — Att%", content=_attainment_leaderboard_table(
+        _ae_attainment_map, df_ae_won, "TACV_WON", "AE")))
+with _att_col2:
+    st.html(_section("Top SEs — Att%", content=_attainment_leaderboard_table(
+        _se_attainment_map, df_se_won, "TACV_WON", "SE")))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # USE CASES GROUP
