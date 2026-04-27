@@ -380,6 +380,28 @@ def _expand(cols):
     )
 # Derive AMSExpansion rep→region from current pipeline snapshot (REPORTING, no row access policy).
 _OPP_MAX_DS = "(SELECT MAX(DS) FROM SALES.REPORTING.CORE_OPPORTUNITY_POST_SPLIT)"
+_FY27_START = "'2026-02-01'"   # FY27 comp plan start date
+
+def _ytd_end_date(periods):
+    """Return ISO date string of the last day of the latest month in the selected periods.
+    Used to compute YTD TACV (Feb 1 FY27-start through the latest selected month)."""
+    import calendar as _cal
+    _fq_last = {"Q1": (4, 0), "Q2": (7, 0), "Q3": (10, 0), "Q4": (1, 1)}
+    max_ym = (2026, 2)
+    for p in periods:
+        if len(p) == 7 and p[4] == '-':  # YYYY-MM
+            y, m = int(p[:4]), int(p[5:])
+            if (y, m) > max_ym:
+                max_ym = (y, m)
+        elif p.startswith("FY") and "-Q" in p:  # FYxx-Qn
+            fy = int(p[2:4]); qn = p.split("-")[1]
+            base = 2000 + fy - 1
+            mon, yr_off = _fq_last.get(qn, (4, 0))
+            ym = (base + yr_off, mon)
+            if ym > max_ym:
+                max_ym = ym
+    y, m = max_ym
+    return date(y, m, _cal.monthrange(y, m)[1]).isoformat()
 
 def _setsail_reps_cte():
     """AEs: distinct OPPORTUNITY_OWNER_NAME → region."""
@@ -507,6 +529,30 @@ def sql_ae_quota():
     Cache is populated from SALES.ATTAINMENT.ATTAINMENT_SUMMARY via SALES_ENGINEER role
     since SALES_STREAMLIT_RL lacks direct schema access."""
     return "SELECT REP_NAME, QUOTA_ROLE, ANNUAL_QUOTA FROM TEMP.NATHOMAS.AMS_QUOTA_CACHE"
+
+def sql_ae_tacv_ytd(ytd_end):
+    """YTD TACV Won per AE from FY27 start (Feb 1) through ytd_end date."""
+    return f"""
+SELECT OPPORTUNITY_OWNER_NAME AS AE, REGION, SUM(TOTAL_ACV) AS TACV_WON
+FROM SALES.REPORTING.CORE_OPPORTUNITY_POST_SPLIT
+WHERE THEATER='AMSExpansion' AND IS_CLOSED=TRUE AND IS_WON=TRUE
+  AND DS={_OPP_MAX_DS}
+  AND CLOSE_DATE::DATE >= {_FY27_START}
+  AND CLOSE_DATE::DATE <= '{ytd_end}'
+  AND TOTAL_ACV > 0
+GROUP BY AE, REGION"""
+
+def sql_dm_tacv_ytd(ytd_end):
+    """YTD TACV Won per DM from FY27 start (Feb 1) through ytd_end date."""
+    return f"""
+SELECT DM, REGION, SUM(TOTAL_ACV) AS TACV_WON
+FROM SALES.REPORTING.CORE_OPPORTUNITY_POST_SPLIT
+WHERE THEATER='AMSExpansion' AND IS_CLOSED=TRUE AND IS_WON=TRUE
+  AND DS={_OPP_MAX_DS}
+  AND CLOSE_DATE::DATE >= {_FY27_START}
+  AND CLOSE_DATE::DATE <= '{ytd_end}'
+  AND TOTAL_ACV > 0
+GROUP BY DM, REGION"""
 
 def sql_ae_tacv_created():
     return f"""
@@ -1101,25 +1147,36 @@ if not df_dm_won.empty:
         _p = getattr(_r, "ATTAINMENT_PCT", None)
         if _q is not None and not pd.isna(_q):
             _dm_attainment_map[_r.DM] = (float(_q), float(_p) if _p is not None and not pd.isna(_p) else None)
-_se_attainment_map = {}
-df_se_won = _query(sql_se_tacv_won(), region, periods)
-if not df_se_won.empty:
-    df_se_won = (df_se_won.groupby("SE", as_index=False)
-                 .agg({"TACV_WON": "sum", "DEAL_COUNT": "sum"})
-                 .sort_values("TACV_WON", ascending=False).reset_index(drop=True))
-    df_se_won["SE"] = df_se_won["SE"].str.strip()
-    if not _df_quota.empty:
-        _se_quota_rows = _df_quota[_df_quota["QUOTA_ROLE"] == "Team SE"]
-        _se_quota_map  = dict(zip(_se_quota_rows["REP_NAME"].str.strip(), pd.to_numeric(_se_quota_rows["ANNUAL_QUOTA"], errors="coerce")))
-        df_se_won["ANNUAL_QUOTA"]   = df_se_won["SE"].map(_se_quota_map)
-        df_se_won["ATTAINMENT_PCT"] = (
-            df_se_won["TACV_WON"] / df_se_won["ANNUAL_QUOTA"] * 100
-        ).where(df_se_won["ANNUAL_QUOTA"].fillna(0) > 0)
-    for _r in df_se_won.itertuples():
-        _q = getattr(_r, "ANNUAL_QUOTA", None)
-        _p = getattr(_r, "ATTAINMENT_PCT", None)
-        if _q is not None and not pd.isna(_q):
-            _se_attainment_map[_r.SE] = (float(_q), float(_p) if _p is not None and not pd.isna(_p) else None)
+# ── YTD attainment maps (FY27-start through latest selected month) ──────────
+_ytd_end = _ytd_end_date(periods)
+_ae_attainment_ytd_map = {}
+_dm_attainment_ytd_map = {}
+_df_ae_ytd = pd.DataFrame()
+_df_dm_ytd = pd.DataFrame()
+if not _df_quota.empty:
+    _ytd_quota_ae = dict(zip(_df_quota[_df_quota["QUOTA_ROLE"]=="AE"]["REP_NAME"],
+                              pd.to_numeric(_df_quota[_df_quota["QUOTA_ROLE"]=="AE"]["ANNUAL_QUOTA"], errors="coerce")))
+    _ytd_quota_dm = dict(zip(_df_quota[_df_quota["QUOTA_ROLE"]=="DM"]["REP_NAME"].str.strip(),
+                              pd.to_numeric(_df_quota[_df_quota["QUOTA_ROLE"]=="DM"]["ANNUAL_QUOTA"], errors="coerce")))
+    _df_ae_ytd = _query_all(sql_ae_tacv_ytd(_ytd_end))
+    if not _df_ae_ytd.empty:
+        if region != "Theater":
+            _df_ae_ytd = _df_ae_ytd[_df_ae_ytd["REGION"] == region]
+        _df_ae_ytd = _df_ae_ytd.groupby("AE", as_index=False)["TACV_WON"].sum()
+        for _r in _df_ae_ytd.itertuples():
+            _q = _ytd_quota_ae.get(_r.AE)
+            if _q and not pd.isna(_q):
+                _ae_attainment_ytd_map[_r.AE] = (float(_q), float(_r.TACV_WON) / float(_q) * 100)
+    _df_dm_ytd = _query_all(sql_dm_tacv_ytd(_ytd_end))
+    if not _df_dm_ytd.empty:
+        if region != "Theater":
+            _df_dm_ytd = _df_dm_ytd[_df_dm_ytd["REGION"] == region]
+        _df_dm_ytd = _df_dm_ytd.groupby("DM", as_index=False)["TACV_WON"].sum()
+        _df_dm_ytd["DM"] = _df_dm_ytd["DM"].str.strip()
+        for _r in _df_dm_ytd.itertuples():
+            _q = _ytd_quota_dm.get(_r.DM)
+            if _q and not pd.isna(_q):
+                _dm_attainment_ytd_map[_r.DM] = (float(_q), float(_r.TACV_WON) / float(_q) * 100)
 df_ae_created = _query(sql_ae_tacv_created(),    region, periods)
 if not df_ae_created.empty:
     df_ae_created = (df_ae_created.groupby("AE", as_index=False)
@@ -1188,13 +1245,12 @@ with t5:
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="group-label">Attainment Leaders</div>', unsafe_allow_html=True)
 
-_att_col1, _att_col2 = st.columns(2)
-with _att_col1:
-    st.html(_section("Top AEs — Att%", content=_attainment_leaderboard_table(
-        _ae_attainment_map, df_ae_won, "TACV_WON", "AE")))
-with _att_col2:
-    st.html(_section("Top SEs — Att%", content=_attainment_leaderboard_table(
-        _se_attainment_map, df_se_won, "TACV_WON", "SE")))
+if tacv_view == "Top AEs":
+    st.html(_section(f"Top AEs — YTD Att% (thru {_ytd_end})", content=_attainment_leaderboard_table(
+        _ae_attainment_ytd_map, _df_ae_ytd, "TACV_WON", "AE")))
+else:
+    st.html(_section(f"Top DMs — YTD Att% (thru {_ytd_end})", content=_attainment_leaderboard_table(
+        _dm_attainment_ytd_map, _df_dm_ytd, "TACV_WON", "DM")))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # USE CASES GROUP
