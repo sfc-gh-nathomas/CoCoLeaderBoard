@@ -470,14 +470,12 @@ FROM expanded GROUP BY REGION, PERIOD_KEY"""
 def sql_top_deals():
     """Single query for all Top Deals tabs (TACV / TCV / Growth ACV). Python sorts per tab."""
     return f"""
-WITH {_SE_ATTR_CTE},
-base AS (
-    SELECT o.REP_NAME AS AE, COALESCE(se.SALES_ENGINEER_NAME,'—') AS SE, o.ACCOUNT_NAME,
+WITH base AS (
+    SELECT o.REP_NAME AS AE, COALESCE(o.LEAD_SALES_ENGINEER_NAME,'—') AS SE, o.ACCOUNT_NAME,
            o.OPPORTUNITY_NAME,
            o.TOTAL_ACV, o.TCV AS NET_TCV, o.GROWTH_ACV, o.DM, o.REGION,
            {_mk("o.CLOSE_DATE::DATE")} AS MONTH_KEY, {_qk("o.CLOSE_DATE::DATE")} AS QUARTER_KEY
     FROM SALES.REPORTING.CORE_OPPORTUNITY_POST_SPLIT o
-    LEFT JOIN se_attr se ON se.ACCOUNT_ID=o.ACCOUNT_ID
     WHERE o.THEATER='AMSExpansion' AND o.IS_CLOSED=TRUE AND o.IS_WON=TRUE
       AND o.DS={_OPP_MAX_DS} AND o.CLOSE_DATE::DATE>={_LOOKBACK} AND o.TOTAL_ACV>0
 ), expanded AS ({_expand("AE, SE, ACCOUNT_NAME, OPPORTUNITY_NAME, TOTAL_ACV, NET_TCV, GROWTH_ACV, DM")})
@@ -486,12 +484,10 @@ FROM expanded"""
 
 def sql_ae_tacv_won():
     return f"""
-WITH {_SE_ATTR_CTE},
-base AS (
-    SELECT o.REP_NAME AS AE, COALESCE(se.SALES_ENGINEER_NAME,'—') AS SE, o.TOTAL_ACV, o.REGION,
+WITH base AS (
+    SELECT o.REP_NAME AS AE, COALESCE(o.LEAD_SALES_ENGINEER_NAME,'—') AS SE, o.TOTAL_ACV, o.REGION,
            {_mk("o.CLOSE_DATE::DATE")} AS MONTH_KEY, {_qk("o.CLOSE_DATE::DATE")} AS QUARTER_KEY
     FROM SALES.REPORTING.CORE_OPPORTUNITY_POST_SPLIT o
-    LEFT JOIN se_attr se ON se.ACCOUNT_ID=o.ACCOUNT_ID
     WHERE o.THEATER='AMSExpansion' AND o.IS_CLOSED=TRUE AND o.IS_WON=TRUE
       AND o.DS={_OPP_MAX_DS} AND o.CLOSE_DATE::DATE>={_LOOKBACK} AND o.TOTAL_ACV>0
 ), expanded AS ({_expand("AE, SE, TOTAL_ACV")})
@@ -556,13 +552,11 @@ GROUP BY DM, REGION"""
 
 def sql_ae_tacv_created():
     return f"""
-WITH {_SE_ATTR_CTE},
-base AS (
-    SELECT o.OPPORTUNITY_OWNER_NAME AS AE, COALESCE(se.SALES_ENGINEER_NAME,'—') AS SE,
+WITH base AS (
+    SELECT o.OPPORTUNITY_OWNER_NAME AS AE, COALESCE(o.LEAD_SALES_ENGINEER_NAME,'—') AS SE,
            o.TOTAL_ACV, o.REGION,
            {_mk("o.SALES_QUALIFIED_DATE")} AS MONTH_KEY, {_qk("o.SALES_QUALIFIED_DATE")} AS QUARTER_KEY
     FROM SALES.REPORTING.CORE_OPPORTUNITY_POST_SPLIT o
-    LEFT JOIN se_attr se ON se.ACCOUNT_ID=o.ACCOUNT_ID
     WHERE o.THEATER='AMSExpansion' AND o.DS={_OPP_MAX_DS} AND o.SALES_QUALIFIED_DATE>={_LOOKBACK}
 ), expanded AS ({_expand("AE, SE, TOTAL_ACV")})
 SELECT AE, MAX(SE) AS SE, SUM(TOTAL_ACV) AS TACV_CREATED, COUNT(*) AS DEAL_COUNT, REGION, PERIOD_KEY
@@ -583,14 +577,12 @@ def sql_top_uc(t):
     de, we = _uc_params(t)
     pf = f"u.{de}"
     return f"""
-WITH {_SE_ATTR_CTE},
-base AS (
-    SELECT u.OWNER_NAME AS AE, COALESCE(se.SALES_ENGINEER_NAME,'—') AS SE,
+WITH base AS (
+    SELECT u.OWNER_NAME AS AE, COALESCE(u.USE_CASE_LEAD_SE_NAME, u.ACCOUNT_LEAD_SE_NAME, '—') AS SE,
            u.ACCOUNT_NAME, u.USE_CASE_NAME, u.USE_CASE_EACV AS USE_CASE_ACV,
            u.ACCOUNT_DM AS DM, u.REGION_NAME AS REGION,
            {_mk(pf)} AS MONTH_KEY, {_qk(pf)} AS QUARTER_KEY
     FROM SNOWPUBLIC.STREAMLIT.DIM_USE_CASE_MDM_CACHE u
-    LEFT JOIN se_attr se ON se.ACCOUNT_ID=u.ACCOUNT_ID
     WHERE u.THEATER_NAME='AMSExpansion'{we} AND {pf}>={_LOOKBACK}
 ), expanded AS ({_expand("AE, SE, ACCOUNT_NAME, USE_CASE_NAME, USE_CASE_ACV, DM")})
 SELECT AE, SE, ACCOUNT_NAME, USE_CASE_NAME, USE_CASE_ACV, DM, REGION, PERIOD_KEY
@@ -619,24 +611,24 @@ FROM expanded GROUP BY OWNER, ROLE, REGION, PERIOD_KEY ORDER BY MEETING_COUNT DE
 
 def sql_consumption():
     return f"""
-WITH {_SE_ATTR_CTE},
-acct_dim AS (
-    SELECT ACCOUNT_ID AS SALESFORCE_ACCOUNT_ID, ACCOUNT_NAME, OPPORTUNITY_OWNER_NAME AS AE, DM, REGION
+WITH se_lookup AS (
+    SELECT ACCOUNT_ID, COALESCE(LEAD_SALES_ENGINEER_NAME, '—') AS SE
     FROM SALES.REPORTING.CORE_OPPORTUNITY_POST_SPLIT
     WHERE THEATER='AMSExpansion' AND DS={_OPP_MAX_DS}
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY SALESFORCE_ACCOUNT_ID
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY ACCOUNT_ID
                                ORDER BY SALES_QUALIFIED_DATE DESC NULLS LAST) = 1
 ),
 monthly_revenue AS (
-    SELECT cr.SALESFORCE_ACCOUNT_ID, a.ACCOUNT_NAME, a.AE,
-           COALESCE(se.SALES_ENGINEER_NAME, '—') AS SE,
-           a.DM, a.REGION,
-           DATE_TRUNC('month', cr.GENERAL_DATE) AS month_year,
-           SUM(cr.TOTAL_REVENUE) AS monthly_revenue
-    FROM SALES.REPORTING.CORE_PRODUCT_CATEGORY_CONSUMPTION cr
-    JOIN acct_dim a ON a.SALESFORCE_ACCOUNT_ID = cr.SALESFORCE_ACCOUNT_ID
-    LEFT JOIN se_attr se ON se.ACCOUNT_ID = cr.SALESFORCE_ACCOUNT_ID
-    WHERE DATE_TRUNC('month', cr.GENERAL_DATE) >= {_LOOKBACK_CONSUMPTION}
+    SELECT c.ACCOUNT_ID AS SALESFORCE_ACCOUNT_ID, c.ACCOUNT_NAME, c.OWNER_NAME AS AE,
+           COALESCE(se.SE, '—') AS SE,
+           c.DM, c.REGION,
+           DATE_TRUNC('month', c.GENERAL_DATE) AS month_year,
+           SUM(c.TOTAL_REVENUE) AS monthly_revenue
+    FROM SALES.REPORTING.CORE_CONSUMPTION c
+    LEFT JOIN se_lookup se ON se.ACCOUNT_ID = c.ACCOUNT_ID
+    WHERE c.THEATER='AMSExpansion'
+      AND c.GENERAL_DATE >= DATEADD('month', -25, DATE_TRUNC('month', CURRENT_DATE()))
+      AND c.GENERAL_DATE < DATE_TRUNC('month', CURRENT_DATE()) + INTERVAL '1 month'
     GROUP BY 1, 2, 3, 4, 5, 6, 7
 ), with_lags AS (
     SELECT *, LAG(monthly_revenue) OVER (PARTITION BY salesforce_account_id ORDER BY month_year) AS prev_month_rev,
@@ -654,6 +646,7 @@ monthly_revenue AS (
                 ELSE monthly_revenue - prev_year_rev END AS YOY_DELTA,
            TO_CHAR(month_year,'YYYY-MM') AS PERIOD_KEY
     FROM with_lags
+    WHERE month_year >= {_LOOKBACK_CONSUMPTION}
 )
 SELECT ACCOUNT_NAME, AE, SE, DM, REGION, MONTHLY_REVENUE, MOM_PCT, MOM_DELTA, YOY_PCT, YOY_DELTA, PERIOD_KEY FROM metrics
 UNION ALL
@@ -816,7 +809,7 @@ def _ae_leaderboard_table(df, val_col, count_col, val_label, count_label, se_col
     quota_headers = '<th class="right">Quota</th><th class="right">Att%</th>' if has_quota else ""
     return f"""<table class="lb-table">
       <thead><tr>
-        <th style="width:36px">#</th><th>Name</th>
+        <th style="width:36px">#</th><th>AE / SE</th>
         <th class="right">{val_label}</th>
         {quota_headers}
         <th class="right">{count_label}</th>
@@ -896,7 +889,7 @@ def _attainment_leaderboard_table(attainment_map, df_won, won_col, name_col):
         </tr>"""
     return f"""<table class="lb-table">
       <thead><tr>
-        <th style="width:36px">#</th><th>Name</th>
+        <th style="width:36px">#</th><th>AE / SE</th>
         <th class="right">TACV Won</th>
         <th class="right">Quota</th>
         <th class="right">Att%</th>
